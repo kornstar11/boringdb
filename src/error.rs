@@ -1,3 +1,5 @@
+use std::time;
+
 use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -6,4 +8,6 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub enum Error {
     #[error("IO Error {0}")]
     IO(#[from] std::io::Error),
+    #[error("Time Error {0}")]
+    TimeError(time::SystemTimeError)
 }

@@ -1,24 +1,26 @@
+use std::{borrow::Borrow, ops::Deref};
+
 use super::{ValueRef, SSTable, MutSSTable};
 use crate::error::*;
 ///
 /// In-memory SSTable implementation
 /// Deletes marked as Tombstones
 /// 
-pub struct InMemorySSTable {
+pub struct Memtable {
     size: usize,
     keys: Vec<Vec<u8>>,
     values: Vec<ValueRef>
 } 
 
-impl InMemorySSTable {
+impl Memtable {
     pub fn into_key_values(self) -> (Vec<Vec<u8>>, Vec<ValueRef>) {
         (self.keys, self.values)
     }
 }
 
-impl Default for InMemorySSTable {
+impl Default for Memtable {
     fn default() -> Self {
-        InMemorySSTable {
+        Memtable {
             size: 0,
             keys: Vec::new(),
             values: Vec::new()
@@ -26,13 +28,22 @@ impl Default for InMemorySSTable {
     }
 }
 
-impl AsRef<InMemorySSTable> for InMemorySSTable {
-    fn as_ref(&self) -> &InMemorySSTable {
+impl AsRef<Memtable> for Memtable {
+    fn as_ref(&self) -> &Memtable {
         self
     }
 }
 
-impl<'a> SSTable<&'a [u8]> for &'a InMemorySSTable {
+// impl Deref for InMemorySSTable {
+//     type Target = InMemorySSTable;
+
+//     fn deref(&self) -> &Self::Target {
+//         self
+//     }
+// }
+
+
+impl<'a> SSTable<&'a [u8]> for &'a Memtable {
     fn size(&self) -> Result<usize> {
         Ok(self.size)
     }
@@ -47,12 +58,9 @@ impl<'a> SSTable<&'a [u8]> for &'a InMemorySSTable {
             Err(_) => None
         })
     }
-    fn might_contain(&self, k: &[u8]) -> Result<bool> {
-        self.get(k).map(|r| r.is_some())
-    }
 }
 
-impl MutSSTable for InMemorySSTable {
+impl MutSSTable for Memtable {
     fn put(&mut self, k: Vec<u8>, v: Vec<u8>) {
         match self.keys.binary_search(&k) {
             Ok(pos) => {
@@ -66,6 +74,7 @@ impl MutSSTable for InMemorySSTable {
         }
     }
     fn delete(&mut self, k: &[u8]) -> bool {
+        self.size += 1; // no matter what we add a tombstone, so this should be ok.
         match self.keys.binary_search_by_key(&k, |i| i.as_slice()) {
             Ok(pos) => {
                 if let Some(v) = self.values.get_mut(pos) {
@@ -84,7 +93,7 @@ mod test {
     #[test]
     fn in_memory_sstable_can_get_put_delete() {
         use super::*;
-        let mut sstable = InMemorySSTable::default();
+        let mut sstable = Memtable::default();
         sstable.put(b"key1".to_vec(), b"value1".to_vec());
         sstable.put(b"key2".to_vec(), b"value2".to_vec());
         sstable.put(b"key3".to_vec(), b"value3".to_vec());

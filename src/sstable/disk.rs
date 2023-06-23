@@ -1,9 +1,9 @@
-use std::{fs::File, io::{Write, Seek, SeekFrom, Read}, cmp::Ordering, sync::{Arc}};
+use std::{fs::File, io::{Write, Seek, SeekFrom, Read}, cmp::Ordering, sync::{Arc}, path::{Path, PathBuf}};
 use bytes::{BytesMut, BufMut, Buf};
 use crate::error::*;
 use parking_lot::Mutex;
 
-use super::{ValueRef, SSTable, memory::InMemorySSTable};
+use super::{ValueRef, SSTable, memory::Memtable};
 
 #[derive(Debug)]
 struct ValueIndex {
@@ -85,7 +85,7 @@ impl Value {
 /// ```
 /// Both keys and values retain their sorted order from the MemorySSTable.
 /// Tombstones are tracked via a 0 byte proceeding the values.
-pub struct InternalDiskSSTable {
+struct InternalDiskSSTable {
     file: File,
 }
 
@@ -106,11 +106,16 @@ impl InternalDiskSSTable {
         Ok(buf)
     }
 
-    fn read_key_index(&mut self) -> Result<Vec<ValueIndex>> {
+    fn read_number_of_keys(&mut self) -> Result<usize> {
         self.file.seek(SeekFrom::End(-8))?; //find the footer
         let keys_start_pos = self.read_u64()?;
         self.file.seek(SeekFrom::Start(keys_start_pos))?;
         let number_of_keys = self.read_u64()? as usize;
+        Ok(number_of_keys)
+    }
+
+    fn read_key_index(&mut self) -> Result<Vec<ValueIndex>> {
+        let number_of_keys = self.read_number_of_keys()?;
         let mut result = vec![];
         for _ in 0..number_of_keys {
             //let key_pos = self.read_u64()? as usize;
@@ -141,7 +146,6 @@ impl InternalDiskSSTable {
                     return Ok(Some(value_idx));
                 },
                 Ordering::Less => {
-                    //r = mid - 1;
                     if let Some(new_r) = mid.checked_sub(1) {
                         r = new_r;
                     } else {
@@ -149,7 +153,6 @@ impl InternalDiskSSTable {
                     };
                 },
                 Ordering::Greater => {
-                    //l = mid + 1;
                     if let Some(new_l) = mid.checked_add(1) {
                         l = new_l;
                     } else {
@@ -176,7 +179,7 @@ impl InternalDiskSSTable {
         Ok(None)
     }
 
-    pub fn encode_inmemory_sstable(memory_sstable: InMemorySSTable, mut file: File) -> Result<InternalDiskSSTable> {
+    pub fn encode_inmemory_sstable(memory_sstable: Memtable, mut file: File) -> Result<InternalDiskSSTable> {
         let mut values_to_position = ValuesToPositions::default();
         let (keys, values) = memory_sstable.into_key_values();
         Self::encode_values(values, &mut file, &mut values_to_position)?;
@@ -228,19 +231,43 @@ impl InternalDiskSSTable {
         Ok(())
     }
 }
-struct DiskSSTable {
+pub struct DiskSSTable {
+    path: PathBuf,
     inner: Arc<Mutex<InternalDiskSSTable>>,
 }
+
+impl DiskSSTable {
+    pub fn convert_mem<P: AsRef<Path>>(path: P, memory_sstable: Memtable) -> Result<DiskSSTable> {
+        let file = File::create(path.as_ref())?;
+        let inner = InternalDiskSSTable::encode_inmemory_sstable(memory_sstable, file)?;
+        Ok(DiskSSTable { 
+            path: path.as_ref().to_path_buf(),
+            inner: Arc::new(Mutex::new(inner)) 
+        })
+
+    }
+    pub fn open<P: AsRef<Path>>(path: P) -> Result<DiskSSTable> {
+        let path = path.as_ref().to_path_buf();
+        let file = File::open(path.clone())?;
+        let inner = InternalDiskSSTable { file };
+        Ok(DiskSSTable { 
+            path,
+            inner: Arc::new(Mutex::new(inner)) 
+        })
+    }
+
+    pub fn path(&self) -> PathBuf {
+        self.path.clone()
+    }
+}
+
 impl SSTable<Vec<u8>> for DiskSSTable {
     fn get(&self, k: &[u8]) -> Result<Option<Vec<u8>>> {
         Ok(self.inner.lock().get_value(k)?)
     }
-    fn might_contain(&self, k: &[u8]) -> Result<bool> {
-        unimplemented!()
-    }
 
     fn size(&self) -> Result<usize> {
-        todo!()
+        self.inner.lock().read_number_of_keys()
     }
 }
 
@@ -256,8 +283,8 @@ mod test {
         }))
     }
 
-    fn generate_memory() -> InMemorySSTable {
-        let mut memory = InMemorySSTable::default();
+    fn generate_memory() -> Memtable {
+        let mut memory = Memtable::default();
         let it = generate_kvs();
         for (k, v) in it {
             memory.put(k.as_bytes().to_vec(), v.as_bytes().to_vec());

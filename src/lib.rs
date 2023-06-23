@@ -1,2 +1,3 @@
-pub mod sstable;
+mod sstable;
+mod engine;
 pub mod error;

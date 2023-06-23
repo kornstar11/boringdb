@@ -1,6 +1,10 @@
 mod memory;
 mod disk;
+
+pub use crate::sstable::memory::Memtable;
+pub use crate::sstable::disk::DiskSSTable;
 use crate::error::*;
+
 pub enum ValueRef {
     MemoryRef(Vec<u8>),
     Tombstone,
@@ -27,7 +31,6 @@ impl ValueRef {
 
 pub trait SSTable<G: AsRef<[u8]>> {
     fn get(&self, k: &[u8]) -> Result<Option<G>>;
-    fn might_contain(&self, k: &[u8]) -> Result<bool>;
     fn size(&self) -> Result<usize>;
 }
 
