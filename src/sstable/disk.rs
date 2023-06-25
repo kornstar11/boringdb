@@ -1,5 +1,6 @@
 use std::{fs::File, io::{Write, Seek, SeekFrom, Read}, cmp::Ordering, sync::{Arc}, path::{Path, PathBuf}};
 use bytes::{BytesMut, BufMut, Buf};
+use thiserror::__private::AsDynError;
 use crate::error::*;
 use parking_lot::Mutex;
 
@@ -76,14 +77,47 @@ impl Value {
 }
 
 struct InternalDiskSSTableIterator<'a> {
-    table: &'a InternalDiskSSTable
+    table: &'a InternalDiskSSTable,
+    index: Option<Result<Vec<ValueIndex>>>,
+    pos: usize,
+}
+
+impl<'a> InternalDiskSSTableIterator<'a> {
+    fn get_next(&'a mut self) -> Result<Option<(&'a [u8], &'a [u8])>> {
+        let index = self.index.get_or_insert_with(|| {
+            self.table.read_key_index()
+        });
+
+        match index {
+            Ok(indexes) => {
+                let index = if let Some(idx) = indexes.get(self.pos) {
+                    idx
+                } else {
+                    return Ok(None);
+                };
+
+                let key_buf = self.table.read_by_value_idx(index)?;
+                let value_idx = self.table.read_value_idx()?;
+                let value_buf = self.table.read_by_value_idx(&value_idx)?;
+                self.pos += 1;
+                return Ok(Some((&key_buf, &value_buf)))
+
+            },
+            Err(e) => {
+                Err(Error::Other(e.to_string()))
+            }
+        }
+    }
 }
 
 impl<'a> Iterator for InternalDiskSSTableIterator<'a> {
-    type Item = (&'a [u8], &'a [u8]);
+    type Item = Result<(&'a [u8], &'a [u8])>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        todo!()
+        let next = self
+            .get_next()
+            .transpose();
+        next
     }
     
 }
