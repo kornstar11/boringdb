@@ -10,15 +10,18 @@ use crate::{error::*, sstable::*};
 const SSTABLE_FILE_PREFIX: &str = "sstable_";
 
 pub struct EngineConfig {
-    base_dir: PathBuf,
-    max_memory_bytes: u64,
+    pub base_dir: PathBuf,
+    pub max_memory_bytes: u64,
+    pub flush_event_handler: Box<dyn Fn(usize, PathBuf) -> ()>
 }
+
 
 impl Default for EngineConfig {
     fn default() -> Self {
         Self { 
             base_dir: PathBuf::from("/tmp"), 
-            max_memory_bytes: 1024 * 1000 * 10 // 10MB
+            max_memory_bytes: 1024 * 1000 * 10, // 10MB
+            flush_event_handler: Box::new(|_flushed_size, _path| {()})
         }
     }
 }
@@ -56,15 +59,17 @@ impl Engine {
             .duration_since(time::UNIX_EPOCH).map_err(Error::TimeError)?
             .as_micros();
         let mut path = self.config.base_dir.clone();
-        path.push(format!("{}_{}.data", SSTABLE_FILE_PREFIX, time));
+        path.push(format!("{}{}.data", SSTABLE_FILE_PREFIX, time));
         let memory_sstable = std::mem::take(&mut self.memtable);
-        let disk_table = DiskSSTable::convert_mem(path, memory_sstable)?;
+        let size = memory_sstable.as_ref().size()?;
+        let disk_table = DiskSSTable::convert_mem(path.clone(), memory_sstable)?;
         self.disk_sstables.push(disk_table);
+        (self.config.flush_event_handler)(size, path);
         Ok(())
     }
 
     fn check_flush(&mut self) -> Result<()> {
-        if self.memtable.as_ref().size()? > self.config.max_memory_bytes as _{
+        if self.memtable.as_ref().size()? >= self.config.max_memory_bytes as _{
             self.flush_to_disk()?;
         }
         Ok(())
@@ -98,5 +103,34 @@ impl Engine {
         self.memtable.delete(k);
         self.check_flush()?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::sync::{atomic::{AtomicU64, AtomicUsize}, Arc};
+
+    use super::*;
+
+    #[test]
+    fn flushes_data_to_disk_when_mem_size() {
+        let flushed = Arc::new(AtomicUsize::new(0));
+        let local_flushed = Arc::clone(&flushed);
+        let config = EngineConfig {
+            max_memory_bytes: 30,
+            flush_event_handler: Box::new(move |flushed_size, _| {
+                let flushed = Arc::clone(&flushed);
+                println!("Flushing {}", flushed_size);
+                flushed.store(flushed_size, std::sync::atomic::Ordering::SeqCst);
+            }),
+            .. EngineConfig::default()
+        };
+        let mut engine = Engine::new(config);
+        engine.put(b"key1".to_vec(), b"value1".to_vec()).unwrap();
+        engine.put(b"key2".to_vec(), b"value2".to_vec()).unwrap();
+        engine.put(b"key3".to_vec(), b"value3".to_vec()).unwrap();
+        engine.put(b"key4".to_vec(), b"value4".to_vec()).unwrap();
+        assert_eq!(local_flushed.load(std::sync::atomic::Ordering::SeqCst), 40);
+
     }
 }

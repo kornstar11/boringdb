@@ -75,6 +75,19 @@ impl Value {
     }
 }
 
+struct InternalDiskSSTableIterator<'a> {
+    table: &'a InternalDiskSSTable
+}
+
+impl<'a> Iterator for InternalDiskSSTableIterator<'a> {
+    type Item = (&'a [u8], &'a [u8]);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        todo!()
+    }
+    
+}
+
 /// 
 /// Immutable SSTable stored on Disk. The general file layout is as follows: 
 /// ```text
@@ -113,17 +126,28 @@ impl InternalDiskSSTable {
         let number_of_keys = self.read_u64()? as usize;
         Ok(number_of_keys)
     }
-
+    ///
+    /// Returns the positions of the sorted keys and their length
     fn read_key_index(&mut self) -> Result<Vec<ValueIndex>> {
         let number_of_keys = self.read_number_of_keys()?;
         let mut result = vec![];
         for _ in 0..number_of_keys {
             //let key_pos = self.read_u64()? as usize;
-            let idx_buf = self.read_bytes(16)?;
-            let idx = ValueIndex::decode(&idx_buf);
+            let idx = self.read_value_idx()?;
             result.push(idx);
         }
         Ok(result)
+    }
+
+    fn read_by_value_idx(&mut self, idx: &ValueIndex) -> Result<Vec<u8>> {
+        self.file.seek(SeekFrom::Start(idx.pos as u64))?;
+        let key_buf = self.read_bytes(idx.len)?;
+        Ok(key_buf)
+    }
+
+    fn read_value_idx(&mut self) -> Result<ValueIndex> {
+        let idx_buf = self.read_bytes(16)?;
+        Ok(ValueIndex::decode(&idx_buf))
     }
 
     fn search_key_positions(&mut self, k: &[u8]) -> Result<Option<ValueIndex>> {
@@ -132,17 +156,11 @@ impl InternalDiskSSTable {
         let mut r = key_idx_to_position.len() - 1;
         while r >= l {
             let mid = (l + r) / 2;
-            //println!("mid: {}, l: {}, r: {}", mid, l, r);
             let idx = &key_idx_to_position[mid];
-            self.file.seek(SeekFrom::Start(idx.pos as u64))?;
-            //read key length
-            //let key_len = self.read_u64()? as usize;
-            let key_buf = self.read_bytes(idx.len)?;
-            //println!("key_buf: {:?}", String::from_utf8_lossy(&key_buf).to_string());
+            let key_buf = self.read_by_value_idx(idx)?;
             match k.cmp(&key_buf) {
                 Ordering::Equal => {
-                    let value_idx_buf = self.read_bytes(16)?;
-                    let value_idx = ValueIndex::decode(&value_idx_buf);
+                    let value_idx = self.read_value_idx()?;
                     return Ok(Some(value_idx));
                 },
                 Ordering::Less => {
@@ -168,8 +186,7 @@ impl InternalDiskSSTable {
         let value_idx = self.search_key_positions(k)?;
         match value_idx {
             Some(value_idx) => {
-                self.file.seek(SeekFrom::Start(value_idx.pos as u64))?;
-                let value_buf = self.read_bytes(value_idx.len)?;
+                let value_buf = self.read_by_value_idx(&value_idx)?;
                 if let Value{ value_ref: ValueRef::MemoryRef(value)} = Value::decode(&value_buf) {
                     return Ok(Some(value));
                 }

@@ -97,6 +97,7 @@ mod test {
         sstable.put(b"key1".to_vec(), b"value1".to_vec());
         sstable.put(b"key2".to_vec(), b"value2".to_vec());
         sstable.put(b"key3".to_vec(), b"value3".to_vec());
+        assert_eq!(sstable.size, 30);
         assert_eq!((&sstable).get(b"key1").unwrap(), Some(b"value1".as_ref()));
         assert_eq!((&sstable).get(b"key2").unwrap(), Some(b"value2".as_ref()));
         assert_eq!(sstable.as_ref().get(b"key3").unwrap(), Some(b"value3".as_ref()));
