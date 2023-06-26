@@ -77,13 +77,13 @@ impl Value {
 }
 
 struct InternalDiskSSTableIterator<'a> {
-    table: &'a InternalDiskSSTable,
+    table: &'a mut InternalDiskSSTable,
     index: Option<Result<Vec<ValueIndex>>>,
     pos: usize,
 }
 
 impl<'a> InternalDiskSSTableIterator<'a> {
-    fn get_next(&'a mut self) -> Result<Option<(&'a [u8], &'a [u8])>> {
+    fn get_next(&mut self) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
         let index = self.index.get_or_insert_with(|| {
             self.table.read_key_index()
         });
@@ -100,7 +100,7 @@ impl<'a> InternalDiskSSTableIterator<'a> {
                 let value_idx = self.table.read_value_idx()?;
                 let value_buf = self.table.read_by_value_idx(&value_idx)?;
                 self.pos += 1;
-                return Ok(Some((&key_buf, &value_buf)))
+                return Ok(Some((key_buf, value_buf)))
 
             },
             Err(e) => {
@@ -111,7 +111,7 @@ impl<'a> InternalDiskSSTableIterator<'a> {
 }
 
 impl<'a> Iterator for InternalDiskSSTableIterator<'a> {
-    type Item = Result<(&'a [u8], &'a [u8])>;
+    type Item = Result<(Vec<u8>, Vec<u8>)>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let next = self
