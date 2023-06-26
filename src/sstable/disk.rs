@@ -1,6 +1,5 @@
 use std::{fs::File, io::{Write, Seek, SeekFrom, Read}, cmp::Ordering, sync::{Arc}, path::{Path, PathBuf}};
 use bytes::{BytesMut, BufMut, Buf};
-use thiserror::__private::AsDynError;
 use crate::error::*;
 use parking_lot::Mutex;
 
@@ -39,13 +38,14 @@ impl ValuesToPositions {
     fn split(self) -> (Vec<ValueIndex>, usize) {
         (self.values_to_positions, self.position)
     }
-    
 }
 
-
+#[derive(Debug)]
 struct Value {
     value_ref: ValueRef,
 }
+
+
 
 impl Value {
     fn encode(self, buf: &mut BytesMut) {
@@ -76,6 +76,9 @@ impl Value {
     }
 }
 
+
+/// 
+/// Iterator over all keys and values in InternalDiskSSTable.
 struct InternalDiskSSTableIterator<'a> {
     table: &'a mut InternalDiskSSTable,
     index: Option<Result<Vec<ValueIndex>>>,
@@ -83,7 +86,10 @@ struct InternalDiskSSTableIterator<'a> {
 }
 
 impl<'a> InternalDiskSSTableIterator<'a> {
-    fn get_next(&mut self) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
+    fn new(table: &'a mut InternalDiskSSTable) -> Self {
+        Self { table, index: None, pos: 0 }
+    }
+    fn get_next(&mut self) -> Result<Option<(Vec<u8>, Value)>> {
         let index = self.index.get_or_insert_with(|| {
             self.table.read_key_index()
         });
@@ -99,8 +105,9 @@ impl<'a> InternalDiskSSTableIterator<'a> {
                 let key_buf = self.table.read_by_value_idx(index)?;
                 let value_idx = self.table.read_value_idx()?;
                 let value_buf = self.table.read_by_value_idx(&value_idx)?;
+                let value = Value::decode(&value_buf);
                 self.pos += 1;
-                return Ok(Some((key_buf, value_buf)))
+                return Ok(Some((key_buf, value)))
 
             },
             Err(e) => {
@@ -111,7 +118,7 @@ impl<'a> InternalDiskSSTableIterator<'a> {
 }
 
 impl<'a> Iterator for InternalDiskSSTableIterator<'a> {
-    type Item = Result<(Vec<u8>, Vec<u8>)>;
+    type Item = Result<(Vec<u8>, Value)>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let next = self
@@ -137,9 +144,9 @@ struct InternalDiskSSTable {
 }
 
 impl InternalDiskSSTable {
-    // pub fn new(file: File, memory_sstable: InMemorySSTable) -> Self {
-    //     DiskSSTable { file }
-    // }
+    pub fn iter(&mut self) -> InternalDiskSSTableIterator {
+        InternalDiskSSTableIterator::new(self)
+    }
 
     fn read_u64(&mut self) -> Result<u64> {
         let mut buf = [0u8; 8];
@@ -374,5 +381,22 @@ mod test {
         for (k, v) in generate_kvs() {
             assert_eq!(ss_table.get_value(k.as_bytes()).unwrap(), Some(v.as_bytes().to_vec()));
         }
+    }
+    #[test]
+    fn is_able_to_iterate() {
+        let mut ss_table = generate_disk();
+        let result = ss_table.iter()
+            .map(|res| res.unwrap())
+            .map(|(k, v)| {
+                (String::from_utf8_lossy(&k).to_string(), v.value_ref.to_string())
+            })
+            .collect::<Vec<_>>();
+        let mut control = generate_kvs().collect::<Vec<_>>();
+        control.sort();
+        
+
+        assert_eq!(control, result);
+
+
     }
 }
