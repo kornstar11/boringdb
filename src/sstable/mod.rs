@@ -1,11 +1,11 @@
-mod memory;
 mod disk;
+mod memory;
 
 use std::fmt::Display;
 
-pub use crate::sstable::memory::Memtable;
-pub use crate::sstable::disk::DiskSSTable;
 use crate::error::*;
+pub use crate::sstable::disk::DiskSSTable;
+pub use crate::sstable::memory::Memtable;
 #[derive(Debug)]
 pub enum ValueRef {
     MemoryRef(Vec<u8>),
@@ -17,7 +17,7 @@ impl Display for ValueRef {
         match self {
             Self::MemoryRef(v) => {
                 write!(f, "{}", String::from_utf8_lossy(v).to_string())
-            },
+            }
             _ => {
                 write!(f, "Tombsome()")
             }
@@ -29,10 +29,9 @@ impl Into<Vec<u8>> for ValueRef {
     fn into(self) -> Vec<u8> {
         match self {
             ValueRef::MemoryRef(v) => v,
-            ValueRef::Tombstone => Vec::new()
+            ValueRef::Tombstone => Vec::new(),
         }
     }
-    
 }
 
 impl ValueRef {

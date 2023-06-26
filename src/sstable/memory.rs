@@ -1,16 +1,14 @@
-use std::{borrow::Borrow, ops::Deref};
-
-use super::{ValueRef, SSTable, MutSSTable};
+use super::{MutSSTable, SSTable, ValueRef};
 use crate::error::*;
 ///
 /// In-memory SSTable implementation
 /// Deletes marked as Tombstones
-/// 
+///
 pub struct Memtable {
     size: usize,
     keys: Vec<Vec<u8>>,
-    values: Vec<ValueRef>
-} 
+    values: Vec<ValueRef>,
+}
 
 impl Memtable {
     pub fn into_key_values(self) -> (Vec<Vec<u8>>, Vec<ValueRef>) {
@@ -23,7 +21,7 @@ impl Default for Memtable {
         Memtable {
             size: 0,
             keys: Vec::new(),
-            values: Vec::new()
+            values: Vec::new(),
         }
     }
 }
@@ -42,20 +40,17 @@ impl AsRef<Memtable> for Memtable {
 //     }
 // }
 
-
 impl<'a> SSTable<&'a [u8]> for &'a Memtable {
     fn size(&self) -> Result<usize> {
         Ok(self.size)
     }
     fn get(&self, k: &[u8]) -> Result<Option<&'a [u8]>> {
         Ok(match self.keys.binary_search_by_key(&k, |i| i.as_slice()) {
-            Ok(pos) => {
-                match &self.values[pos] {
-                    ValueRef::MemoryRef(v) => Some(v.as_slice()),
-                    ValueRef::Tombstone => None,
-                }
+            Ok(pos) => match &self.values[pos] {
+                ValueRef::MemoryRef(v) => Some(v.as_slice()),
+                ValueRef::Tombstone => None,
             },
-            Err(_) => None
+            Err(_) => None,
         })
     }
 }
@@ -65,7 +60,7 @@ impl MutSSTable for Memtable {
         match self.keys.binary_search(&k) {
             Ok(pos) => {
                 self.values[pos] = ValueRef::MemoryRef(v);
-            },
+            }
             Err(pos) => {
                 self.size += k.len() + v.len();
                 self.keys.insert(pos, k);
@@ -82,8 +77,8 @@ impl MutSSTable for Memtable {
                     *v = ValueRef::Tombstone;
                 }
                 true
-            },
-            Err(_) => {false}
+            }
+            Err(_) => false,
         }
     }
 }
@@ -100,7 +95,10 @@ mod test {
         assert_eq!(sstable.size, 30);
         assert_eq!((&sstable).get(b"key1").unwrap(), Some(b"value1".as_ref()));
         assert_eq!((&sstable).get(b"key2").unwrap(), Some(b"value2".as_ref()));
-        assert_eq!(sstable.as_ref().get(b"key3").unwrap(), Some(b"value3".as_ref()));
+        assert_eq!(
+            sstable.as_ref().get(b"key3").unwrap(),
+            Some(b"value3".as_ref())
+        );
         sstable.delete(b"key2");
         assert_eq!(sstable.as_ref().get(b"key2").unwrap(), None);
     }

@@ -11,6 +11,5 @@ pub enum Error {
     #[error("Time Error {0}")]
     TimeError(time::SystemTimeError),
     #[error("Other {0}")]
-    Other(String)
-
+    Other(String),
 }

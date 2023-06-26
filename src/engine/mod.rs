@@ -1,27 +1,26 @@
-use std::{path::PathBuf, fs::File, time};
+use std::{fs::File, path::PathBuf, time};
 
 use crate::{error::*, sstable::*};
 
 ///
 /// Engine handle managment of the SSTables. It is responsible for converting a memory SSTable into a disk SSTable.
 /// Also handled are management of Bloomfilters for the DiskSSTables.
-/// 
+///
 /// TODO need a WAL to make memtable safe...
 const SSTABLE_FILE_PREFIX: &str = "sstable_";
 
 pub struct EngineConfig {
     pub base_dir: PathBuf,
     pub max_memory_bytes: u64,
-    pub flush_event_handler: Box<dyn Fn(usize, PathBuf) -> ()>
+    pub flush_event_handler: Box<dyn Fn(usize, PathBuf) -> ()>,
 }
-
 
 impl Default for EngineConfig {
     fn default() -> Self {
-        Self { 
-            base_dir: PathBuf::from("/tmp"), 
+        Self {
+            base_dir: PathBuf::from("/tmp"),
             max_memory_bytes: 1024 * 1000 * 10, // 10MB
-            flush_event_handler: Box::new(|_flushed_size, _path| {()})
+            flush_event_handler: Box::new(|_flushed_size, _path| ()),
         }
     }
 }
@@ -56,10 +55,11 @@ impl Engine {
 
     ///
     /// Flush memtable to disk and add the new disktable to our stack of disktables.
-    /// 
+    ///
     fn flush_to_disk(&mut self) -> Result<()> {
         let time = time::SystemTime::now()
-            .duration_since(time::UNIX_EPOCH).map_err(Error::TimeError)?
+            .duration_since(time::UNIX_EPOCH)
+            .map_err(Error::TimeError)?
             .as_micros();
         let mut path = self.config.base_dir.clone();
         path.push(format!("{}{}.data", SSTABLE_FILE_PREFIX, time));
@@ -72,7 +72,7 @@ impl Engine {
     }
 
     fn check_flush(&mut self) -> Result<()> {
-        if self.memtable.as_ref().size()? >= self.config.max_memory_bytes as _{
+        if self.memtable.as_ref().size()? >= self.config.max_memory_bytes as _ {
             self.flush_to_disk()?;
         }
         Ok(())
@@ -111,7 +111,10 @@ impl Engine {
 
 #[cfg(test)]
 mod test {
-    use std::sync::{atomic::{AtomicU64, AtomicUsize}, Arc};
+    use std::sync::{
+        atomic::{AtomicU64, AtomicUsize},
+        Arc,
+    };
 
     use super::*;
 
@@ -126,7 +129,7 @@ mod test {
                 println!("Flushing {}", flushed_size);
                 flushed.store(flushed_size, std::sync::atomic::Ordering::SeqCst);
             }),
-            .. EngineConfig::default()
+            ..EngineConfig::default()
         };
         let mut engine = Engine::new(config);
         engine.put(b"key1".to_vec(), b"value1".to_vec()).unwrap();
@@ -134,6 +137,5 @@ mod test {
         engine.put(b"key3".to_vec(), b"value3".to_vec()).unwrap();
         engine.put(b"key4".to_vec(), b"value4".to_vec()).unwrap();
         assert_eq!(local_flushed.load(std::sync::atomic::Ordering::SeqCst), 30);
-
     }
 }

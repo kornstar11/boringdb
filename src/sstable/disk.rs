@@ -1,9 +1,15 @@
-use std::{fs::File, io::{Write, Seek, SeekFrom, Read}, cmp::Ordering, sync::{Arc}, path::{Path, PathBuf}};
-use bytes::{BytesMut, BufMut, Buf};
 use crate::error::*;
+use bytes::{Buf, BufMut, BytesMut};
 use parking_lot::Mutex;
+use std::{
+    cmp::Ordering,
+    fs::File,
+    io::{Read, Seek, SeekFrom, Write},
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
-use super::{ValueRef, SSTable, memory::Memtable};
+use super::{memory::Memtable, SSTable, ValueRef};
 
 #[derive(Debug)]
 struct ValueIndex {
@@ -45,8 +51,6 @@ struct Value {
     value_ref: ValueRef,
 }
 
-
-
 impl Value {
     fn encode(self, buf: &mut BytesMut) {
         match self.value_ref {
@@ -54,7 +58,7 @@ impl Value {
                 buf.put_u8(1);
                 buf.put_u64_le(v.len() as u64);
                 buf.put_slice(v.as_slice());
-            },
+            }
             ValueRef::Tombstone => {
                 buf.put_u8(0);
             }
@@ -64,20 +68,23 @@ impl Value {
     fn decode(mut buf: &[u8]) -> Self {
         let is_tombstone = buf.get_u8();
         match is_tombstone {
-            0 => Value { value_ref: ValueRef::Tombstone },
+            0 => Value {
+                value_ref: ValueRef::Tombstone,
+            },
             1 => {
                 let len = buf.get_u64_le() as usize;
                 let mut value_buf = vec![0u8; len];
                 buf.copy_to_slice(&mut value_buf);
-                Value { value_ref: ValueRef::MemoryRef(value_buf) }
-            },
-            _ => panic!("Invalid value")
+                Value {
+                    value_ref: ValueRef::MemoryRef(value_buf),
+                }
+            }
+            _ => panic!("Invalid value"),
         }
     }
 }
 
-
-/// 
+///
 /// Iterator over all keys and optionally values in InternalDiskSSTable.
 struct InternalDiskSSTableIterator<'a> {
     table: &'a mut InternalDiskSSTable,
@@ -88,12 +95,17 @@ struct InternalDiskSSTableIterator<'a> {
 
 impl<'a> InternalDiskSSTableIterator<'a> {
     fn new(table: &'a mut InternalDiskSSTable, get_values: bool) -> Self {
-        Self { table, get_values, index: None, pos: 0 }
+        Self {
+            table,
+            get_values,
+            index: None,
+            pos: 0,
+        }
     }
     fn get_next(&mut self) -> Result<Option<(Vec<u8>, Option<Value>)>> {
-        let index = self.index.get_or_insert_with(|| {
-            self.table.read_key_index()
-        });
+        let index = self
+            .index
+            .get_or_insert_with(|| self.table.read_key_index());
 
         match index {
             Ok(indexes) => {
@@ -112,12 +124,9 @@ impl<'a> InternalDiskSSTableIterator<'a> {
                     None
                 };
                 self.pos += 1;
-                return Ok(Some((key_buf, value_opt)))
-
-            },
-            Err(e) => {
-                Err(Error::Other(e.to_string()))
+                return Ok(Some((key_buf, value_opt)));
             }
+            Err(e) => Err(Error::Other(e.to_string())),
         }
     }
 }
@@ -126,16 +135,13 @@ impl<'a> Iterator for InternalDiskSSTableIterator<'a> {
     type Item = Result<(Vec<u8>, Option<Value>)>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let next = self
-            .get_next()
-            .transpose();
+        let next = self.get_next().transpose();
         next
     }
-    
 }
 
-/// 
-/// Immutable SSTable stored on Disk. The general file layout is as follows: 
+///
+/// Immutable SSTable stored on Disk. The general file layout is as follows:
 /// ```text
 ///   === Values Section: Value | Value | Value
 ///   === Keys Section: Key, ValueIndex | Key, ValueIndex | Key, ValueIndex
@@ -144,9 +150,9 @@ impl<'a> Iterator for InternalDiskSSTableIterator<'a> {
 /// ```
 /// Both keys and values retain their sorted order from the MemorySSTable.
 /// Tombstones are tracked via a 0 byte proceeding the values.
-/// 
-/// As opposed to other impls I have seen, we store the keys and values seperate from each other. The thinking 
-/// is that this will help compresion since we are keeping like for like. It may also help with compaction, in the sense 
+///
+/// As opposed to other impls I have seen, we store the keys and values seperate from each other. The thinking
+/// is that this will help compresion since we are keeping like for like. It may also help with compaction, in the sense
 /// that we can load the keys quicker when comparing sstables.
 struct InternalDiskSSTable {
     file: File,
@@ -215,14 +221,14 @@ impl InternalDiskSSTable {
                 Ordering::Equal => {
                     let value_idx = self.read_value_idx()?;
                     return Ok(Some(value_idx));
-                },
+                }
                 Ordering::Less => {
                     if let Some(new_r) = mid.checked_sub(1) {
                         r = new_r;
                     } else {
                         return Ok(None);
                     };
-                },
+                }
                 Ordering::Greater => {
                     if let Some(new_l) = mid.checked_add(1) {
                         l = new_l;
@@ -240,16 +246,22 @@ impl InternalDiskSSTable {
         match value_idx {
             Some(value_idx) => {
                 let value_buf = self.read_by_value_idx(&value_idx)?;
-                if let Value{ value_ref: ValueRef::MemoryRef(value)} = Value::decode(&value_buf) {
+                if let Value {
+                    value_ref: ValueRef::MemoryRef(value),
+                } = Value::decode(&value_buf)
+                {
                     return Ok(Some(value));
                 }
-            },
+            }
             None => {}
         }
         Ok(None)
     }
 
-    pub fn encode_inmemory_sstable(memory_sstable: Memtable, mut file: File) -> Result<InternalDiskSSTable> {
+    pub fn encode_inmemory_sstable(
+        memory_sstable: Memtable,
+        mut file: File,
+    ) -> Result<InternalDiskSSTable> {
         let mut values_to_position = ValuesToPositions::default();
         let (keys, values) = memory_sstable.into_key_values();
         Self::encode_values(values, &mut file, &mut values_to_position)?;
@@ -258,7 +270,11 @@ impl InternalDiskSSTable {
         Ok(InternalDiskSSTable { file })
     }
 
-    fn encode_keys(keys: Vec<Vec<u8>>, file: &mut File, values_to_position: ValuesToPositions) -> Result<()> {
+    fn encode_keys(
+        keys: Vec<Vec<u8>>,
+        file: &mut File,
+        values_to_position: ValuesToPositions,
+    ) -> Result<()> {
         let (key_idxs, mut position) = values_to_position.split();
         // tracks the key index to position in the file
         let mut key_idx_to_pos = vec![];
@@ -285,23 +301,27 @@ impl InternalDiskSSTable {
         file.write_all(&buf)?;
         file.sync_all()?;
         Ok(())
-
     }
 
-    fn encode_values(values: Vec<ValueRef>, file: &mut File, values_to_position: &mut ValuesToPositions) -> Result<()> {
+    fn encode_values(
+        values: Vec<ValueRef>,
+        file: &mut File,
+        values_to_position: &mut ValuesToPositions,
+    ) -> Result<()> {
         for value_ref in values.into_iter() {
             let mut buf = BytesMut::new();
             let value = Value { value_ref };
             value.encode(&mut buf);
             let len = buf.len();
             file.write_all(&buf)?;
-            values_to_position.values_to_positions.push(ValueIndex::new(values_to_position.position, len));
+            values_to_position
+                .values_to_positions
+                .push(ValueIndex::new(values_to_position.position, len));
             values_to_position.position += len;
         }
         Ok(())
     }
 }
-
 
 ///
 /// Outward facing interface of the sstable, allows for cloning, and is a central point to control the mutex.
@@ -314,19 +334,18 @@ impl DiskSSTable {
     pub fn convert_mem<P: AsRef<Path>>(path: P, memory_sstable: Memtable) -> Result<DiskSSTable> {
         let file = File::create(path.as_ref())?;
         let inner = InternalDiskSSTable::encode_inmemory_sstable(memory_sstable, file)?;
-        Ok(DiskSSTable { 
+        Ok(DiskSSTable {
             path: path.as_ref().to_path_buf(),
-            inner: Arc::new(Mutex::new(inner)) 
+            inner: Arc::new(Mutex::new(inner)),
         })
-
     }
     pub fn open<P: AsRef<Path>>(path: P) -> Result<DiskSSTable> {
         let path = path.as_ref().to_path_buf();
         let file = File::open(path.clone())?;
         let inner = InternalDiskSSTable { file };
-        Ok(DiskSSTable { 
+        Ok(DiskSSTable {
             path,
-            inner: Arc::new(Mutex::new(inner)) 
+            inner: Arc::new(Mutex::new(inner)),
         })
     }
 
@@ -352,9 +371,7 @@ mod test {
     use super::*;
 
     fn generate_kvs() -> Box<dyn Iterator<Item = (String, String)>> {
-        Box::new((0..100).map(|i| {
-            (format!("k{}", i), format!("v{}", i))
-        }))
+        Box::new((0..100).map(|i| (format!("k{}", i), format!("v{}", i))))
     }
 
     fn generate_memory() -> Memtable {
@@ -395,24 +412,28 @@ mod test {
     fn encodes_an_sstable_and_finds_value() {
         let mut ss_table = generate_disk();
         for (k, v) in generate_kvs() {
-            assert_eq!(ss_table.get_value(k.as_bytes()).unwrap(), Some(v.as_bytes().to_vec()));
+            assert_eq!(
+                ss_table.get_value(k.as_bytes()).unwrap(),
+                Some(v.as_bytes().to_vec())
+            );
         }
     }
     #[test]
     fn is_able_to_iterate() {
         let mut ss_table = generate_disk();
-        let result = ss_table.iter_values()
+        let result = ss_table
+            .iter_values()
             .map(|res| res.unwrap())
             .map(|(k, v)| {
-                (String::from_utf8_lossy(&k).to_string(), v.unwrap().value_ref.to_string())
+                (
+                    String::from_utf8_lossy(&k).to_string(),
+                    v.unwrap().value_ref.to_string(),
+                )
             })
             .collect::<Vec<_>>();
         let mut control = generate_kvs().collect::<Vec<_>>();
         control.sort();
-        
 
         assert_eq!(control, result);
-
-
     }
 }
