@@ -78,18 +78,19 @@ impl Value {
 
 
 /// 
-/// Iterator over all keys and values in InternalDiskSSTable.
+/// Iterator over all keys and optionally values in InternalDiskSSTable.
 struct InternalDiskSSTableIterator<'a> {
     table: &'a mut InternalDiskSSTable,
+    get_values: bool,
     index: Option<Result<Vec<ValueIndex>>>,
     pos: usize,
 }
 
 impl<'a> InternalDiskSSTableIterator<'a> {
-    fn new(table: &'a mut InternalDiskSSTable) -> Self {
-        Self { table, index: None, pos: 0 }
+    fn new(table: &'a mut InternalDiskSSTable, get_values: bool) -> Self {
+        Self { table, get_values, index: None, pos: 0 }
     }
-    fn get_next(&mut self) -> Result<Option<(Vec<u8>, Value)>> {
+    fn get_next(&mut self) -> Result<Option<(Vec<u8>, Option<Value>)>> {
         let index = self.index.get_or_insert_with(|| {
             self.table.read_key_index()
         });
@@ -103,11 +104,15 @@ impl<'a> InternalDiskSSTableIterator<'a> {
                 };
 
                 let key_buf = self.table.read_by_value_idx(index)?;
-                let value_idx = self.table.read_value_idx()?;
-                let value_buf = self.table.read_by_value_idx(&value_idx)?;
-                let value = Value::decode(&value_buf);
+                let value_opt = if self.get_values {
+                    let value_idx = self.table.read_value_idx()?;
+                    let value_buf = self.table.read_by_value_idx(&value_idx)?;
+                    Some(Value::decode(&value_buf))
+                } else {
+                    None
+                };
                 self.pos += 1;
-                return Ok(Some((key_buf, value)))
+                return Ok(Some((key_buf, value_opt)))
 
             },
             Err(e) => {
@@ -118,7 +123,7 @@ impl<'a> InternalDiskSSTableIterator<'a> {
 }
 
 impl<'a> Iterator for InternalDiskSSTableIterator<'a> {
-    type Item = Result<(Vec<u8>, Value)>;
+    type Item = Result<(Vec<u8>, Option<Value>)>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let next = self
@@ -139,13 +144,20 @@ impl<'a> Iterator for InternalDiskSSTableIterator<'a> {
 /// ```
 /// Both keys and values retain their sorted order from the MemorySSTable.
 /// Tombstones are tracked via a 0 byte proceeding the values.
+/// 
+/// As opposed to other impls I have seen, we store the keys and values seperate from each other. The thinking 
+/// is that this will help compresion since we are keeping like for like. It may also help with compaction, in the sense 
+/// that we can load the keys quicker when comparing sstables.
 struct InternalDiskSSTable {
     file: File,
 }
 
 impl InternalDiskSSTable {
-    pub fn iter(&mut self) -> InternalDiskSSTableIterator {
-        InternalDiskSSTableIterator::new(self)
+    pub fn iter_values(&mut self) -> InternalDiskSSTableIterator {
+        InternalDiskSSTableIterator::new(self, true)
+    }
+    pub fn iter_keys(&mut self) -> InternalDiskSSTableIterator {
+        InternalDiskSSTableIterator::new(self, false)
     }
 
     fn read_u64(&mut self) -> Result<u64> {
@@ -289,6 +301,10 @@ impl InternalDiskSSTable {
         Ok(())
     }
 }
+
+
+///
+/// Outward facing interface of the sstable, allows for cloning, and is a central point to control the mutex.
 pub struct DiskSSTable {
     path: PathBuf,
     inner: Arc<Mutex<InternalDiskSSTable>>,
@@ -385,10 +401,10 @@ mod test {
     #[test]
     fn is_able_to_iterate() {
         let mut ss_table = generate_disk();
-        let result = ss_table.iter()
+        let result = ss_table.iter_values()
             .map(|res| res.unwrap())
             .map(|(k, v)| {
-                (String::from_utf8_lossy(&k).to_string(), v.value_ref.to_string())
+                (String::from_utf8_lossy(&k).to_string(), v.unwrap().value_ref.to_string())
             })
             .collect::<Vec<_>>();
         let mut control = generate_kvs().collect::<Vec<_>>();

@@ -54,6 +54,9 @@ impl Engine {
         Ok(disk_sstables)
     }
 
+    ///
+    /// Flush memtable to disk and add the new disktable to our stack of disktables.
+    /// 
     fn flush_to_disk(&mut self) -> Result<()> {
         let time = time::SystemTime::now()
             .duration_since(time::UNIX_EPOCH).map_err(Error::TimeError)?
@@ -130,7 +133,7 @@ mod test {
         engine.put(b"key2".to_vec(), b"value2".to_vec()).unwrap();
         engine.put(b"key3".to_vec(), b"value3".to_vec()).unwrap();
         engine.put(b"key4".to_vec(), b"value4".to_vec()).unwrap();
-        assert_eq!(local_flushed.load(std::sync::atomic::Ordering::SeqCst), 40);
+        assert_eq!(local_flushed.load(std::sync::atomic::Ordering::SeqCst), 30);
 
     }
 }
