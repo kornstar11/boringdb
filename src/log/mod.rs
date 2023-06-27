@@ -10,3 +10,7 @@ use std::{
 };
 
 //pub struct Recv
+
+pub struct LogQueue{
+    path: PathBuf,
+}

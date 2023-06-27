@@ -3,7 +3,7 @@ use bytes::{Buf, BufMut, BytesMut};
 use parking_lot::Mutex;
 use std::{
     cmp::Ordering,
-    fs::File,
+    fs::{File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::Arc,
@@ -266,6 +266,7 @@ impl InternalDiskSSTable {
         let (keys, values) = memory_sstable.into_key_values();
         Self::encode_values(values, &mut file, &mut values_to_position)?;
         Self::encode_keys(keys, &mut file, values_to_position)?;
+        file.sync_all()?;
 
         Ok(InternalDiskSSTable { file })
     }
@@ -332,8 +333,11 @@ pub struct DiskSSTable {
 
 impl DiskSSTable {
     pub fn convert_mem<P: AsRef<Path>>(path: P, memory_sstable: Memtable) -> Result<DiskSSTable> {
-        let file = File::create(path.as_ref())?;
+        let file = {
+            OpenOptions::new().read(true).write(true).create_new(true).open(path.as_ref())?
+        };
         let inner = InternalDiskSSTable::encode_inmemory_sstable(memory_sstable, file)?;
+        //inner.get_value(b"k").unwrap();
         Ok(DiskSSTable {
             path: path.as_ref().to_path_buf(),
             inner: Arc::new(Mutex::new(inner)),
