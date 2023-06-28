@@ -162,8 +162,22 @@ impl InternalDiskSSTable {
     pub fn iter_values(&mut self) -> InternalDiskSSTableIterator {
         InternalDiskSSTableIterator::new(self, true)
     }
+
     pub fn iter_keys(&mut self) -> InternalDiskSSTableIterator {
         InternalDiskSSTableIterator::new(self, false)
+    }
+
+    pub fn encode_inmemory_sstable(
+        memory_sstable: Memtable,
+        mut file: File,
+    ) -> Result<InternalDiskSSTable> {
+        let mut values_to_position = ValuesToPositions::default();
+        let (keys, values) = memory_sstable.into_key_values();
+        Self::encode_values(values, &mut file, &mut values_to_position)?;
+        Self::encode_keys(keys, &mut file, values_to_position)?;
+        file.sync_all()?;
+
+        Ok(InternalDiskSSTable { file })
     }
 
     fn read_u64(&mut self) -> Result<u64> {
@@ -258,19 +272,6 @@ impl InternalDiskSSTable {
         Ok(None)
     }
 
-    pub fn encode_inmemory_sstable(
-        memory_sstable: Memtable,
-        mut file: File,
-    ) -> Result<InternalDiskSSTable> {
-        let mut values_to_position = ValuesToPositions::default();
-        let (keys, values) = memory_sstable.into_key_values();
-        Self::encode_values(values, &mut file, &mut values_to_position)?;
-        Self::encode_keys(keys, &mut file, values_to_position)?;
-        file.sync_all()?;
-
-        Ok(InternalDiskSSTable { file })
-    }
-
     fn encode_keys(
         keys: Vec<Vec<u8>>,
         file: &mut File,
@@ -326,6 +327,7 @@ impl InternalDiskSSTable {
 
 ///
 /// Outward facing interface of the sstable, allows for cloning, and is a central point to control the mutex.
+#[derive(Clone)]
 pub struct DiskSSTable {
     path: PathBuf,
     inner: Arc<Mutex<InternalDiskSSTable>>,
@@ -351,6 +353,20 @@ impl DiskSSTable {
             path,
             inner: Arc::new(Mutex::new(inner)),
         })
+    }
+
+    pub fn drop_and_remove_file(self) -> Result<()> {
+        // this is tricky, it would be nice to enforce the lock being dead
+        if let Ok(inner) = Arc::try_unwrap(self.inner) {
+            let inner = inner.into_inner();
+            std::mem::drop(inner);
+            std::fs::remove_file(self.path)?;
+            Ok(())
+        } else {
+            Err(Error::Other(String::from("Reference to this SSTable is still held.")))
+        }
+
+        
     }
 
     pub fn path(&self) -> PathBuf {
