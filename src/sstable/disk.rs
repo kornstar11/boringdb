@@ -84,61 +84,6 @@ impl Value {
     }
 }
 
-///
-/// Iterator over all keys and optionally values in InternalDiskSSTable.
-struct InternalDiskSSTableIterator<'a> {
-    table: &'a mut InternalDiskSSTable,
-    get_values: bool,
-    index: Option<Result<Vec<ValueIndex>>>,
-    pos: usize,
-}
-
-impl<'a> InternalDiskSSTableIterator<'a> {
-    fn new(table: &'a mut InternalDiskSSTable, get_values: bool) -> Self {
-        Self {
-            table,
-            get_values,
-            index: None,
-            pos: 0,
-        }
-    }
-    fn get_next(&mut self) -> Result<Option<(Vec<u8>, Option<Value>)>> {
-        let index = self
-            .index
-            .get_or_insert_with(|| self.table.read_key_index());
-
-        match index {
-            Ok(indexes) => {
-                let index = if let Some(idx) = indexes.get(self.pos) {
-                    idx
-                } else {
-                    return Ok(None);
-                };
-
-                let key_buf = self.table.read_by_value_idx(index)?;
-                let value_opt = if self.get_values {
-                    let value_idx = self.table.read_value_idx()?;
-                    let value_buf = self.table.read_by_value_idx(&value_idx)?;
-                    Some(Value::decode(&value_buf))
-                } else {
-                    None
-                };
-                self.pos += 1;
-                return Ok(Some((key_buf, value_opt)));
-            }
-            Err(e) => Err(Error::Other(e.to_string())),
-        }
-    }
-}
-
-impl<'a> Iterator for InternalDiskSSTableIterator<'a> {
-    type Item = Result<(Vec<u8>, Option<Value>)>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let next = self.get_next().transpose();
-        next
-    }
-}
 
 ///
 /// Immutable SSTable stored on Disk. The general file layout is as follows:
@@ -159,13 +104,13 @@ struct InternalDiskSSTable {
 }
 
 impl InternalDiskSSTable {
-    pub fn iter_values(&mut self) -> InternalDiskSSTableIterator {
-        InternalDiskSSTableIterator::new(self, true)
-    }
+    // pub fn iter_values(&mut self) -> DiskSSTableIterator {
+    //     DiskSSTableIterator::new(self, true)
+    // }
 
-    pub fn iter_keys(&mut self) -> InternalDiskSSTableIterator {
-        InternalDiskSSTableIterator::new(self, false)
-    }
+    // pub fn iter_keys(&mut self) -> DiskSSTableIterator {
+    //     DiskSSTableIterator::new(self, false)
+    // }
 
     pub fn encode_inmemory_sstable(
         memory_sstable: Memtable,
@@ -326,6 +271,63 @@ impl InternalDiskSSTable {
 }
 
 ///
+/// Iterator over all keys and optionally values in InternalDiskSSTable.
+struct DiskSSTableIterator {
+    table: Arc<Mutex<InternalDiskSSTable>>,
+    get_values: bool,
+    index: Option<Result<Vec<ValueIndex>>>,
+    pos: usize,
+}
+
+impl DiskSSTableIterator {
+    fn new(table: Arc<Mutex<InternalDiskSSTable>>, get_values: bool) -> Self {
+        Self {
+            table,
+            get_values,
+            index: None,
+            pos: 0,
+        }
+    }
+    fn get_next(&mut self) -> Result<Option<(Vec<u8>, Option<Value>)>> {
+        let table = Arc::clone(&self.table);
+        let mut table = table.lock();
+        let index = self
+            .index
+            .get_or_insert_with(|| table.read_key_index());
+
+        match index {
+            Ok(indexes) => {
+                let index = if let Some(idx) = indexes.get(self.pos) {
+                    idx
+                } else {
+                    return Ok(None);
+                };
+
+                let key_buf = table.read_by_value_idx(index)?;
+                let value_opt = if self.get_values {
+                    let value_idx = table.read_value_idx()?;
+                    let value_buf = table.read_by_value_idx(&value_idx)?;
+                    Some(Value::decode(&value_buf))
+                } else {
+                    None
+                };
+                self.pos += 1;
+                return Ok(Some((key_buf, value_opt)));
+            }
+            Err(e) => Err(Error::Other(e.to_string())),
+        }
+    }
+}
+
+impl Iterator for DiskSSTableIterator {
+    type Item = Result<(Vec<u8>, Option<Value>)>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let next = self.get_next().transpose();
+        next
+    }
+}
+///
 /// Outward facing interface of the sstable, allows for cloning, and is a central point to control the mutex.
 #[derive(Clone)]
 pub struct DiskSSTable {
@@ -348,6 +350,7 @@ impl DiskSSTable {
             inner: Arc::new(Mutex::new(inner)),
         })
     }
+
     pub fn open<P: AsRef<Path>>(path: P) -> Result<DiskSSTable> {
         let path = path.as_ref().to_path_buf();
         let file = File::open(path.clone())?;
@@ -373,6 +376,15 @@ impl DiskSSTable {
     pub fn path(&self) -> PathBuf {
         self.path.clone()
     }
+
+    pub fn iter_values(&mut self) -> DiskSSTableIterator {
+        DiskSSTableIterator::new(Arc::clone(&self.inner), true)
+    }
+
+    pub fn iter_keys(&mut self) -> DiskSSTableIterator {
+        DiskSSTableIterator::new(Arc::clone(&self.inner), false)
+    }
+    
 }
 
 impl SSTable<Vec<u8>> for DiskSSTable {
@@ -441,9 +453,8 @@ mod test {
     }
     #[test]
     fn is_able_to_iterate() {
-        let mut ss_table = generate_disk();
-        let result = ss_table
-            .iter_values()
+        let ss_table = generate_disk();
+        let result = DiskSSTableIterator::new(Arc::new(Mutex::new(ss_table)), true)
             .map(|res| res.unwrap())
             .map(|(k, v)| {
                 (
