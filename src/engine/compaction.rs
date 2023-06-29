@@ -19,7 +19,6 @@ impl SortedDiskSSTableKeyValueIterator {
             order: Ordering::Less
         }
     }
-    
 }
 
 impl Iterator for SortedDiskSSTableKeyValueIterator {

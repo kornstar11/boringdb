@@ -104,25 +104,29 @@ struct InternalDiskSSTable {
 }
 
 impl InternalDiskSSTable {
-    // pub fn iter_values(&mut self) -> DiskSSTableIterator {
-    //     DiskSSTableIterator::new(self, true)
-    // }
-
-    // pub fn iter_keys(&mut self) -> DiskSSTableIterator {
-    //     DiskSSTableIterator::new(self, false)
-    // }
-
-    pub fn encode_inmemory_sstable(
-        memory_sstable: Memtable,
+    pub fn encode_it(
+        keys: impl Iterator<Item = Vec<u8>>,
+        values: impl Iterator<Item = ValueRef>,
         mut file: File,
     ) -> Result<InternalDiskSSTable> {
         let mut values_to_position = ValuesToPositions::default();
-        let (keys, values) = memory_sstable.into_key_values();
         Self::encode_values(values, &mut file, &mut values_to_position)?;
         Self::encode_keys(keys, &mut file, values_to_position)?;
         file.sync_all()?;
 
         Ok(InternalDiskSSTable { file })
+    }
+
+    pub fn encode_inmemory_sstable(
+        memory_sstable: Memtable,
+        file: File,
+    ) -> Result<InternalDiskSSTable> {
+        let (keys, values) = memory_sstable.into_key_values();
+        Self::encode_it(
+            keys.into_iter(),
+            values.into_iter(),
+            file
+        )
     }
 
     fn read_u64(&mut self) -> Result<u64> {
@@ -218,7 +222,7 @@ impl InternalDiskSSTable {
     }
 
     fn encode_keys(
-        keys: Vec<Vec<u8>>,
+        keys: impl Iterator<Item = Vec<u8>>,
         file: &mut File,
         values_to_position: ValuesToPositions,
     ) -> Result<()> {
@@ -226,7 +230,7 @@ impl InternalDiskSSTable {
         // tracks the key index to position in the file
         let mut key_idx_to_pos = vec![];
         // write the key values to the file as well as the corresponding value index in the file.
-        for (key, value_idx) in keys.into_iter().zip(key_idxs) {
+        for (key, value_idx) in keys.zip(key_idxs) {
             key_idx_to_pos.push(ValueIndex::new(position, key.len()));
             let mut buf = BytesMut::new();
             buf.put_slice(key.as_slice());
@@ -251,11 +255,11 @@ impl InternalDiskSSTable {
     }
 
     fn encode_values(
-        values: Vec<ValueRef>,
+        values: impl Iterator<Item = ValueRef>,
         file: &mut File,
         values_to_position: &mut ValuesToPositions,
     ) -> Result<()> {
-        for value_ref in values.into_iter() {
+        for value_ref in values {
             let mut buf = BytesMut::new();
             let value = Value { value_ref };
             value.encode(&mut buf);
@@ -288,9 +292,7 @@ impl DiskSSTableKeyValueIterator {
             },
             _ => None
         }
-
     }
-    
 }
 
 impl Iterator for DiskSSTableKeyValueIterator {
