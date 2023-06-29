@@ -1,5 +1,5 @@
-use std::{sync::mpsc::{sync_channel, SyncSender, Receiver}, thread::{JoinHandle, spawn}, collections::HashMap, path::PathBuf};
-use crate::{error::*, sstable::DiskSSTable};
+use std::{sync::mpsc::{sync_channel, SyncSender, Receiver}, thread::{JoinHandle, spawn}, collections::HashMap, path::PathBuf, fs::File};
+use crate::{error::*, sstable::{DiskSSTable}};
 use super::CompactorCommand;
 
 pub trait CompactorFactory: Send {
@@ -15,50 +15,73 @@ struct SimpleCompactorState {
 }
 
 impl SimpleCompactorState {
-    fn compact(&mut self) -> DiskSSTable {
+    /// 
+    /// Returns a Vec<> of paths to delete as well as a new SSTable
+    fn compact(&mut self) -> (Vec<PathBuf>, DiskSSTable) {
         let mut tracked = std::mem::take(&mut self.tracked_sstables)
             .into_values()
             .collect::<Vec<_>>();
         tracked.sort_by_key(|d| d.path());
+        let tracked = tracked
+            .into_iter();
 
         let mut last: Option<DiskSSTable> = None;
 
+        //TODO need to refactor iterators, to take ownership
+        todo!()
 
     }
-    
+}
+
+#[derive(Clone, Copy)]
+struct SimpleCompactorConfig {
+    max_ss_tables: usize
+}
+
+impl Default for SimpleCompactorConfig {
+    fn default() -> Self {
+        Self { max_ss_tables: 10 }
+    }
 }
 
 
 #[derive(Default)]
-pub struct SimpleCompactorFactory{max_ss_tables: usize}
+pub struct SimpleCompactorFactory{config: SimpleCompactorConfig}
 
 impl CompactorFactory for SimpleCompactorFactory {
     fn clone(&self) -> Box<dyn CompactorFactory> {
         Box::new(Self {
-            max_ss_tables: self.max_ss_tables
+            config: self.config
         })
     }
     fn start(&self, compactor_evt_rx: Receiver<CompactorCommand>) -> (Receiver<CompactorCommand>, JoinHandle<Result<()>>) {
         let (tx, rx) = sync_channel(1);
         let mut state = SimpleCompactorState::default();
+        let config = self.config;
         (rx, spawn(move || {
             while let Ok(evt) = compactor_evt_rx.recv() {
                 match evt {
                     CompactorCommand::NewSSTable(table) => {
                         state.tracked_sstables.insert(table.path(), table);
-                        if state.tracked_sstables.len() >= self.max_ss_tables {
-
+                        if state.tracked_sstables.len() >= config.max_ss_tables {
+                            let (to_delete, new_table) = state.compact();
+                            if let Err(_) = tx.send(CompactorCommand::NewSSTable(new_table)) {
+                                break;
+                            }
+                            if let Err(_) = tx.send(CompactorCommand::RemoveSSTables(to_delete)) {
+                                break;
+                            }
                         }
                     },
-                    CompactorCommand::RemoveSSTables(path) => {
-                        state.tracked_sstables.remove(&path);
+                    CompactorCommand::RemoveSSTables(paths) => {
+                        for path in paths {
+                            state.tracked_sstables.remove(&path);
+                        }
                     }
                 }
-
             }
             Ok(())
         }))
-        
     }
 }
 

@@ -9,5 +9,5 @@ mod compaction;
 /// Commands used between the database and compactor
 pub enum CompactorCommand {
     NewSSTable(DiskSSTable),
-    RemoveSSTables(PathBuf)
+    RemoveSSTables(Vec<PathBuf>)
 }

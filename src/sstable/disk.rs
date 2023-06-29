@@ -336,10 +336,13 @@ pub struct DiskSSTable {
 impl DiskSSTable {
     pub fn convert_mem<P: AsRef<Path>>(path: P, memory_sstable: Memtable) -> Result<DiskSSTable> {
         let file = {
-            OpenOptions::new().read(true).write(true).create_new(true).open(path.as_ref())?
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(path.as_ref())?
         };
         let inner = InternalDiskSSTable::encode_inmemory_sstable(memory_sstable, file)?;
-        //inner.get_value(b"k").unwrap();
         Ok(DiskSSTable {
             path: path.as_ref().to_path_buf(),
             inner: Arc::new(Mutex::new(inner)),

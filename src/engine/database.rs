@@ -77,8 +77,10 @@ impl Database {
                         db.add_sstable(new);
 
                     },
-                    CompactorCommand::RemoveSSTables(to_drop) => {
-                        db.remove_sstable(to_drop);
+                    CompactorCommand::RemoveSSTables(to_drops) => {
+                        for to_drop in to_drops {
+                            db.remove_sstable(to_drop);
+                        }
                     }
                 }
             }
