@@ -11,7 +11,7 @@ use std::{
 
 use super::{memory::Memtable, SSTable, ValueRef};
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 struct ValueIndex {
     pos: usize,
     len: usize,
@@ -150,15 +150,17 @@ impl InternalDiskSSTable {
     }
     ///
     /// Returns the positions of the sorted keys and their length
-    fn read_key_index(&mut self) -> Result<Vec<ValueIndex>> {
+    fn read_key_index(&mut self) -> Result<(Vec<ValueIndex>, Vec<ValueIndex>)> {
         let number_of_keys = self.read_number_of_keys()?;
-        let mut result = vec![];
+        let mut key_idxs = vec![];
+        let mut value_idxs = vec![];
         for _ in 0..number_of_keys {
             //let key_pos = self.read_u64()? as usize;
-            let idx = self.read_value_idx()?;
-            result.push(idx);
+            key_idxs.push(self.read_value_idx()?);
+            value_idxs.push(self.read_value_idx()?);
+
         }
-        Ok(result)
+        Ok((key_idxs, value_idxs))
     }
 
     fn read_by_value_idx(&mut self, idx: &ValueIndex) -> Result<Vec<u8>> {
@@ -173,16 +175,16 @@ impl InternalDiskSSTable {
     }
 
     fn search_key_positions(&mut self, k: &[u8]) -> Result<Option<ValueIndex>> {
-        let key_idx_to_position = self.read_key_index()?;
+        let (key_idx_to_position, value_idx_to_position) = self.read_key_index()?;
         let mut l = 0;
         let mut r = key_idx_to_position.len() - 1;
         while r >= l {
             let mid = (l + r) / 2;
-            let idx = &key_idx_to_position[mid];
-            let key_buf = self.read_by_value_idx(idx)?;
+            let key_idx = &key_idx_to_position[mid];
+            let value_idx = value_idx_to_position[mid];
+            let key_buf = self.read_by_value_idx(key_idx)?;
             match k.cmp(&key_buf) {
                 Ordering::Equal => {
-                    let value_idx = self.read_value_idx()?;
                     return Ok(Some(value_idx));
                 }
                 Ordering::Less => {
@@ -226,15 +228,14 @@ impl InternalDiskSSTable {
         file: &mut File,
         values_to_position: ValuesToPositions,
     ) -> Result<()> {
-        let (key_idxs, mut position) = values_to_position.split();
+        let (value_idxs, mut position) = values_to_position.split();
         // tracks the key index to position in the file
-        let mut key_idx_to_pos = vec![];
+        let mut key_idxs = vec![];
         // write the key values to the file as well as the corresponding value index in the file.
-        for (key, value_idx) in keys.zip(key_idxs) {
-            key_idx_to_pos.push(ValueIndex::new(position, key.len()));
+        for key in keys {
+            key_idxs.push(ValueIndex::new(position, key.len()));
             let mut buf = BytesMut::new();
             buf.put_slice(key.as_slice());
-            value_idx.encode(&mut buf);
             let len = buf.len();
             file.write_all(&buf)?;
             position += len;
@@ -243,9 +244,10 @@ impl InternalDiskSSTable {
         let mut buf = BytesMut::new(); //just use one buffer for these since they should be small
         let keys_start_pos = position;
         // encode number of keys
-        buf.put_u64_le(key_idx_to_pos.len() as u64);
-        for key_idx in key_idx_to_pos {
+        buf.put_u64_le(key_idxs.len() as u64);
+        for (key_idx, value_idx) in key_idxs.into_iter().zip(value_idxs.into_iter()) {
             key_idx.encode(&mut buf);
+            value_idx.encode(&mut buf);
         }
         // write keys start position
         buf.put_u64_le(keys_start_pos as u64);
@@ -319,7 +321,7 @@ impl Iterator for DiskSSTableKeyValueIterator {
 struct DiskSSTableIterator {
     table: Arc<Mutex<InternalDiskSSTable>>,
     get_values: bool,
-    index: Option<Result<Vec<ValueIndex>>>,
+    index: Option<Result<(Vec<ValueIndex>, Vec<ValueIndex>)>>,
     pos: usize,
 }
 
@@ -340,21 +342,41 @@ impl DiskSSTableIterator {
             .get_or_insert_with(|| table.read_key_index());
 
         match index {
-            Ok(indexes) => {
-                let index = if let Some(idx) = indexes.get(self.pos) {
-                    idx
+            Ok((key_idxs, value_idxs)) => {
+                let kv_opt = key_idxs.get(self.pos).and_then(|key_idx| {
+                    value_idxs.get(self.pos).map(move |value_idx| {
+                        (key_idx, value_idx)
+                    })
+                });
+                let (key_idx, value_idx) = if let Some(kv) = kv_opt {
+                    kv
                 } else {
                     return Ok(None);
                 };
 
-                let key_buf = table.read_by_value_idx(index)?;
+                let key_buf = table.read_by_value_idx(key_idx)?;
                 let value_opt = if self.get_values {
-                    let value_idx = table.read_value_idx()?;
                     let value_buf = table.read_by_value_idx(&value_idx)?;
                     Some(Value::decode(&value_buf))
                 } else {
                     None
                 };
+
+
+                // let index = if let Some(idx) = key_idxs.get(self.pos) {
+                //     idx
+                // } else {
+                //     return Ok(None);
+                // };
+
+                // let key_buf = table.read_by_value_idx(index)?;
+                // let value_opt = if self.get_values {
+                //     let value_idx = table.read_value_idx()?;
+                //     let value_buf = table.read_by_value_idx(&value_idx)?;
+                //     Some(Value::decode(&value_buf))
+                // } else {
+                //     None
+                // };
                 self.pos += 1;
                 return Ok(Some((key_buf, value_opt)));
             }
