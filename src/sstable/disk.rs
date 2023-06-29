@@ -270,6 +270,48 @@ impl InternalDiskSSTable {
     }
 }
 
+pub struct DiskSSTableKeyValueIterator {
+    inner: DiskSSTableIterator
+}
+
+impl DiskSSTableKeyValueIterator {
+    fn get_next(&mut self) -> Option<Result<Option<(Vec<u8>, Vec<u8>)>>> {
+        match self.inner.next() {
+            Some(Ok((k, Some(Value{value_ref: ValueRef::MemoryRef(data)}) ))) => {
+                Some(Ok(Some((k, data))))
+            },
+            Some(Ok((_, Some(Value{value_ref: ValueRef::Tombstone }) ))) => {
+                Some(Ok(None))
+            },
+            Some(Err(e)) => {
+                Some(Err(e))
+            },
+            _ => None
+        }
+
+    }
+    
+}
+
+impl Iterator for DiskSSTableKeyValueIterator {
+    type Item = Result<(Vec<u8>, Vec<u8>)>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(next) = self.get_next() {
+            match next {
+                Ok(Some((k, v))) => {
+                    return Some(Ok((k, v)));
+                },
+                Err(e) => {
+                    return Some(Err(e));
+                },
+                Ok(None) => {/* loop again */}
+            }
+        }
+        return None;
+    }
+}
+
 ///
 /// Iterator over all keys and optionally values in InternalDiskSSTable.
 struct DiskSSTableIterator {
@@ -377,13 +419,13 @@ impl DiskSSTable {
         self.path.clone()
     }
 
-    pub fn iter_values(&mut self) -> DiskSSTableIterator {
-        DiskSSTableIterator::new(Arc::clone(&self.inner), true)
+    pub fn iter_values(&self) -> DiskSSTableKeyValueIterator {
+        DiskSSTableKeyValueIterator{ inner: DiskSSTableIterator::new(Arc::clone(&self.inner), true)}
     }
 
-    pub fn iter_keys(&mut self) -> DiskSSTableIterator {
-        DiskSSTableIterator::new(Arc::clone(&self.inner), false)
-    }
+    // fn iter_keys(&self) -> DiskSSTableIterator {
+    //     DiskSSTableIterator::new(Arc::clone(&self.inner), false)
+    // }
     
 }
 
@@ -460,6 +502,23 @@ mod test {
                 (
                     String::from_utf8_lossy(&k).to_string(),
                     v.unwrap().value_ref.to_string(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut control = generate_kvs().collect::<Vec<_>>();
+        control.sort();
+
+        assert_eq!(control, result);
+    }
+    #[test]
+    fn is_able_to_iterate_values() {
+        let ss_table = generate_disk();
+        let result = DiskSSTableKeyValueIterator{inner: DiskSSTableIterator::new(Arc::new(Mutex::new(ss_table)), true) }
+            .map(|res| res.unwrap())
+            .map(|(k, v)| {
+                (
+                    String::from_utf8_lossy(&k).to_string(),
+                    String::from_utf8_lossy(&v).to_string()
                 )
             })
             .collect::<Vec<_>>();

@@ -1,10 +1,59 @@
-use std::{sync::mpsc::{sync_channel, SyncSender, Receiver}, thread::{JoinHandle, spawn}, collections::HashMap, path::PathBuf, fs::File};
-use crate::{error::*, sstable::{DiskSSTable}};
+use std::{sync::mpsc::{sync_channel, SyncSender, Receiver}, thread::{JoinHandle, spawn}, collections::HashMap, path::PathBuf, fs::File, cmp::Ordering, iter::Peekable};
+use crate::{error::*, sstable::{DiskSSTable, DiskSSTableKeyValueIterator}};
 use super::CompactorCommand;
 
 pub trait CompactorFactory: Send {
     fn start(&self, compactor_evt_rx: Receiver<CompactorCommand>) -> (Receiver<CompactorCommand>, JoinHandle<Result<()>>);
     fn clone(&self) -> Box<dyn CompactorFactory>;
+}
+
+struct SortedDiskSSTableKeyValueIterator {
+    iters: Vec<Peekable<DiskSSTableKeyValueIterator>>,
+    order: Ordering
+}
+
+impl SortedDiskSSTableKeyValueIterator {
+    fn new(iters: Vec<DiskSSTableKeyValueIterator>) -> Self {
+        SortedDiskSSTableKeyValueIterator {
+            iters: iters.into_iter().map(|it| it.peekable()).collect(),
+            order: Ordering::Less
+        }
+    }
+    
+}
+
+impl Iterator for SortedDiskSSTableKeyValueIterator {
+    type Item = Result<(Vec<u8>, Vec<u8>)>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut preferable_key: Option<(usize, &Vec<u8>)> = None;
+        for (idx, iter) in self.iters.iter_mut().enumerate() {
+            let peeked_key = match iter.peek() {
+                Some(Ok((peeked, _))) => {
+                    Some(peeked)
+                },
+                Some(Err(e)) => {
+                    return Some(Err(Error::Other(e.to_string())));
+                },
+                None => None,
+            };
+            
+            let current_prefered_key = preferable_key.map(|(_, k)| {
+                k
+            });
+
+            if peeked_key.cmp(&current_prefered_key) == self.order || preferable_key.is_none() {
+                preferable_key = peeked_key.map(|k| (idx, k))
+            } 
+        }
+        if let Some((idx, _)) = preferable_key {
+            if let Some(ref mut it) = self.iters.get_mut(idx) {
+                return it.next();
+            }
+        }
+
+        None
+    }
 }
 
 /// Just merges sstables when there are X amount of them
@@ -18,14 +67,13 @@ impl SimpleCompactorState {
     /// 
     /// Returns a Vec<> of paths to delete as well as a new SSTable
     fn compact(&mut self) -> (Vec<PathBuf>, DiskSSTable) {
-        let mut tracked = std::mem::take(&mut self.tracked_sstables)
+        let tracked = std::mem::take(&mut self.tracked_sstables)
             .into_values()
+            .map(|table| table.iter_values())
             .collect::<Vec<_>>();
-        tracked.sort_by_key(|d| d.path());
-        let tracked = tracked
-            .into_iter();
+        let sorted_iter = SortedDiskSSTableKeyValueIterator::new(tracked);
 
-        let mut last: Option<DiskSSTable> = None;
+        //let mut left_to_iter = tracked.len();
 
         //TODO need to refactor iterators, to take ownership
         todo!()
