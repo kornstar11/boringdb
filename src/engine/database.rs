@@ -9,7 +9,7 @@ use parking_lot::Mutex;
 use crate::{error::*, sstable::*};
 
 use super::CompactorCommand;
-use super::compaction::{CompactorFactory, LevelCompactorFactory};
+use super::compaction::{CompactorFactory, SimpleCompactorFactory};
 
 ///
 /// Engine handle managment of the SSTables. It is responsible for converting a memory SSTable into a disk SSTable.
@@ -46,7 +46,7 @@ impl Default for DatabaseConfig {
         Self {
             base_dir: PathBuf::from("/tmp"),
             max_memory_bytes: 1024 * 1000 * 10, // 10MB
-            compactor_factory: Box::new(LevelCompactorFactory::default()),
+            compactor_factory: Box::new(SimpleCompactorFactory::default()),
             metrics: Arc::new(DatabaseMetrics::default()),
         }
     }

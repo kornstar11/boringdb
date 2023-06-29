@@ -365,8 +365,6 @@ impl DiskSSTable {
         } else {
             Err(Error::Other(String::from("Reference to this SSTable is still held.")))
         }
-
-        
     }
 
     pub fn path(&self) -> PathBuf {
