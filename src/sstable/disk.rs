@@ -321,7 +321,7 @@ trait Mapper<O> {
 
 ///
 /// KeyValue Mappers
-struct KeyValueMapper;
+pub struct KeyValueMapper;
 
 impl Mapper<(Vec<u8>, Value)> for KeyValueMapper {
     fn map(
@@ -338,7 +338,7 @@ impl Mapper<(Vec<u8>, Value)> for KeyValueMapper {
 
 ///
 /// KeyMapper
-struct KeyMapper;
+pub struct KeyMapper;
 
 impl Mapper<Vec<u8>> for KeyMapper {
     fn map(
@@ -354,7 +354,7 @@ impl Mapper<Vec<u8>> for KeyMapper {
 
 ///
 /// ValueMapper
-struct ValueMapper;
+pub struct ValueMapper;
 
 impl Mapper<Value> for ValueMapper {
     fn map(

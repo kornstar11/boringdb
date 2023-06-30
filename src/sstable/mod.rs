@@ -4,7 +4,7 @@ mod memory;
 use std::fmt::Display;
 
 use crate::error::*;
-pub use crate::sstable::disk::{DiskSSTable, DiskSSTableKeyValueIterator};
+pub use crate::sstable::disk::{DiskSSTable, DiskSSTableKeyValueIterator, DiskSSTableIterator, KeyMapper, ValueMapper, Value};
 pub use crate::sstable::memory::Memtable;
 #[derive(Debug)]
 pub enum ValueRef {
