@@ -281,6 +281,7 @@ pub struct DiskSSTableKeyValueIterator {
 }
 
 impl DiskSSTableKeyValueIterator {
+
     fn get_next(&mut self) -> Option<Result<Option<(Vec<u8>, Vec<u8>)>>> {
         match self.inner.next() {
             Some(Ok((k, Value{value_ref: ValueRef::MemoryRef(data)} ))) => {
@@ -381,15 +382,6 @@ impl<O: Send, M: Mapper<O>> DiskSSTableIterator<O, M> {
 
                 let mapped = self.mapper.map(&mut table, (key_idx, value_idx))?;
 
-                // let value_opt = if self.get_values {
-                //     let value_buf = table.read_by_value_idx(&value_idx)?;
-                //     Some(Value::decode(&value_buf))
-                // } else {
-                //     None
-                // };
-
-                // let key_buf = table.read_by_value_idx(key_idx)?;
-
                 self.pos += 1;
                 return Ok(Some(mapped));
             }
@@ -457,6 +449,10 @@ impl DiskSSTable {
     }
 
     pub fn iter_key_values(&self) -> DiskSSTableKeyValueIterator {
+        DiskSSTableKeyValueIterator{ inner: DiskSSTableIterator::new(Arc::clone(&self.inner), KeyValueMapper{})}
+    }
+
+    pub fn iter_key(&self) -> DiskSSTableKeyValueIterator {
         DiskSSTableKeyValueIterator{ inner: DiskSSTableIterator::new(Arc::clone(&self.inner), KeyValueMapper{})}
     }
 
