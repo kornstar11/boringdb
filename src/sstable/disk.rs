@@ -325,6 +325,8 @@ trait Mapper<O> {
     ) -> Result<O>;
 }
 
+///
+/// KeyValue Mappers
 struct KeyValueMapper;
 
 impl Mapper<(Vec<u8>, Value)> for KeyValueMapper {
@@ -337,6 +339,38 @@ impl Mapper<(Vec<u8>, Value)> for KeyValueMapper {
         let value_buf = table.read_by_value_idx(&value_idx)?;
         let key_buf = table.read_by_value_idx(key_idx)?;
         Ok((key_buf, Value::decode(&value_buf)))
+    }
+}
+
+///
+/// KeyMapper
+struct KeyMapper;
+
+impl Mapper<Vec<u8>> for KeyMapper {
+    fn map(
+        &self, 
+        table: &mut InternalDiskSSTable, 
+        kv_idxs: (&ValueIndex, &ValueIndex)
+    ) -> Result<Vec<u8>> {
+        let (key_idx, _) = kv_idxs;
+        let key_buf = table.read_by_value_idx(key_idx)?;
+        Ok(key_buf)
+    }
+}
+
+///
+/// ValueMapper
+struct ValueMapper;
+
+impl Mapper<Value> for ValueMapper {
+    fn map(
+        &self, 
+        table: &mut InternalDiskSSTable, 
+        kv_idxs: (&ValueIndex, &ValueIndex)
+    ) -> Result<Value> {
+        let (_key_idx, value_idx) = kv_idxs;
+        let value_buf = table.read_by_value_idx(&value_idx)?;
+        Ok(Value::decode(&value_buf))
     }
 }
 
@@ -452,8 +486,11 @@ impl DiskSSTable {
         DiskSSTableKeyValueIterator{ inner: DiskSSTableIterator::new(Arc::clone(&self.inner), KeyValueMapper{})}
     }
 
-    pub fn iter_key(&self) -> DiskSSTableKeyValueIterator {
-        DiskSSTableKeyValueIterator{ inner: DiskSSTableIterator::new(Arc::clone(&self.inner), KeyValueMapper{})}
+    pub fn iter_key(&self) -> DiskSSTableIterator<Vec<u8>, KeyMapper> {
+        DiskSSTableIterator::new(Arc::clone(&self.inner), KeyMapper{})
+    }
+    pub fn iter_value(&self) -> DiskSSTableIterator<Value, ValueMapper> {
+        DiskSSTableIterator::new(Arc::clone(&self.inner), ValueMapper{})
     }
 
     // fn iter_keys(&self) -> DiskSSTableIterator {
