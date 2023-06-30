@@ -10,10 +10,10 @@ use std::{
     sync::Arc,
 };
 
-use super::{memory::Memtable, SSTable, ValueRef};
+use super::{memory::Memtable, SSTable, ValueRef, mappers::{Mapper, KeyValueMapper}, KeyMapper, ValueMapper};
 
 #[derive(Debug, Copy, Clone)]
-struct ValueIndex {
+pub struct ValueIndex {
     pos: usize,
     len: usize,
 }
@@ -66,7 +66,7 @@ impl Value {
         }
     }
 
-    fn decode(mut buf: &[u8]) -> Self {
+    pub fn decode(mut buf: &[u8]) -> Self {
         let is_tombstone = buf.get_u8();
         match is_tombstone {
             0 => Value {
@@ -99,7 +99,7 @@ impl Value {
 /// As opposed to other impls I have seen, we store the keys and values seperate from each other. The thinking
 /// is that this will help compresion since we are keeping like for like. It may also help with compaction, in the sense
 /// that we can load the keys quicker when comparing sstables.
-struct InternalDiskSSTable {
+pub struct InternalDiskSSTable {
     file: File,
 }
 
@@ -158,7 +158,7 @@ impl InternalDiskSSTable {
         Ok((key_idxs, value_idxs))
     }
 
-    fn read_by_value_idx(&mut self, idx: &ValueIndex) -> Result<Vec<u8>> {
+    pub fn read_by_value_idx(&mut self, idx: &ValueIndex) -> Result<Vec<u8>> {
         self.file.seek(SeekFrom::Start(idx.pos as u64))?;
         let key_buf = self.read_bytes(idx.len)?;
         Ok(key_buf)
@@ -315,58 +315,6 @@ impl Iterator for DiskSSTableKeyValueIterator {
     }
 }
 
-trait Mapper<O> {
-    fn map(&self, table: &mut InternalDiskSSTable, v: (&ValueIndex, &ValueIndex)) -> Result<O>;
-}
-
-///
-/// KeyValue Mappers
-pub struct KeyValueMapper;
-
-impl Mapper<(Vec<u8>, Value)> for KeyValueMapper {
-    fn map(
-        &self,
-        table: &mut InternalDiskSSTable,
-        kv_idxs: (&ValueIndex, &ValueIndex),
-    ) -> Result<(Vec<u8>, Value)> {
-        let (key_idx, value_idx) = kv_idxs;
-        let value_buf = table.read_by_value_idx(&value_idx)?;
-        let key_buf = table.read_by_value_idx(key_idx)?;
-        Ok((key_buf, Value::decode(&value_buf)))
-    }
-}
-
-///
-/// KeyMapper
-pub struct KeyMapper;
-
-impl Mapper<Vec<u8>> for KeyMapper {
-    fn map(
-        &self,
-        table: &mut InternalDiskSSTable,
-        kv_idxs: (&ValueIndex, &ValueIndex),
-    ) -> Result<Vec<u8>> {
-        let (key_idx, _) = kv_idxs;
-        let key_buf = table.read_by_value_idx(key_idx)?;
-        Ok(key_buf)
-    }
-}
-
-///
-/// ValueMapper
-pub struct ValueMapper;
-
-impl Mapper<Value> for ValueMapper {
-    fn map(
-        &self,
-        table: &mut InternalDiskSSTable,
-        kv_idxs: (&ValueIndex, &ValueIndex),
-    ) -> Result<Value> {
-        let (_key_idx, value_idx) = kv_idxs;
-        let value_buf = table.read_by_value_idx(&value_idx)?;
-        Ok(Value::decode(&value_buf))
-    }
-}
 
 ///
 /// Iterator over all keys and optionally values in InternalDiskSSTable.

@@ -1,10 +1,12 @@
 mod disk;
 mod memory;
+mod mappers;
 
 use std::fmt::Display;
 
 use crate::error::*;
-pub use crate::sstable::disk::{DiskSSTable, DiskSSTableKeyValueIterator, DiskSSTableIterator, KeyMapper, ValueMapper, Value};
+pub use mappers::{KeyMapper, ValueMapper};
+pub use crate::sstable::disk::{DiskSSTable, DiskSSTableKeyValueIterator, DiskSSTableIterator, Value};
 pub use crate::sstable::memory::Memtable;
 #[derive(Debug)]
 pub enum ValueRef {
