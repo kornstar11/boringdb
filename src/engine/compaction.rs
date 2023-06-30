@@ -68,7 +68,7 @@ impl SimpleCompactorState {
     fn compact(&mut self) -> (Vec<PathBuf>, DiskSSTable) {
         let tracked = std::mem::take(&mut self.tracked_sstables)
             .into_values()
-            .map(|table| table.iter_values())
+            .map(|table| table.iter_key_values())
             .collect::<Vec<_>>();
         let sorted_iter = SortedDiskSSTableKeyValueIterator::new(tracked);
 

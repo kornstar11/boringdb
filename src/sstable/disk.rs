@@ -6,7 +6,7 @@ use std::{
     fs::{File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::Arc, marker::PhantomData,
 };
 
 use super::{memory::Memtable, SSTable, ValueRef};
@@ -277,16 +277,16 @@ impl InternalDiskSSTable {
 }
 
 pub struct DiskSSTableKeyValueIterator {
-    inner: DiskSSTableIterator
+    inner: DiskSSTableIterator<(Vec<u8>, Value), KeyValueMapper>
 }
 
 impl DiskSSTableKeyValueIterator {
     fn get_next(&mut self) -> Option<Result<Option<(Vec<u8>, Vec<u8>)>>> {
         match self.inner.next() {
-            Some(Ok((k, Some(Value{value_ref: ValueRef::MemoryRef(data)}) ))) => {
+            Some(Ok((k, Value{value_ref: ValueRef::MemoryRef(data)} ))) => {
                 Some(Ok(Some((k, data))))
             },
-            Some(Ok((_, Some(Value{value_ref: ValueRef::Tombstone }) ))) => {
+            Some(Ok((_, Value{value_ref: ValueRef::Tombstone } ))) => {
                 Some(Ok(None))
             },
             Some(Err(e)) => {
@@ -316,25 +316,50 @@ impl Iterator for DiskSSTableKeyValueIterator {
     }
 }
 
-///
-/// Iterator over all keys and optionally values in InternalDiskSSTable.
-struct DiskSSTableIterator {
-    table: Arc<Mutex<InternalDiskSSTable>>,
-    get_values: bool,
-    index: Option<Result<(Vec<ValueIndex>, Vec<ValueIndex>)>>,
-    pos: usize,
+trait Mapper<O> {
+    fn map(
+        &self, 
+        table: &mut InternalDiskSSTable, 
+        v: (&ValueIndex, &ValueIndex)
+    ) -> Result<O>;
 }
 
-impl DiskSSTableIterator {
-    fn new(table: Arc<Mutex<InternalDiskSSTable>>, get_values: bool) -> Self {
+struct KeyValueMapper;
+
+impl Mapper<(Vec<u8>, Value)> for KeyValueMapper {
+    fn map(
+        &self, 
+        table: &mut InternalDiskSSTable, 
+        kv_idxs: (&ValueIndex, &ValueIndex)
+    ) -> Result<(Vec<u8>, Value)> {
+        let (key_idx, value_idx) = kv_idxs;
+        let value_buf = table.read_by_value_idx(&value_idx)?;
+        let key_buf = table.read_by_value_idx(key_idx)?;
+        Ok((key_buf, Value::decode(&value_buf)))
+    }
+}
+
+///
+/// Iterator over all keys and optionally values in InternalDiskSSTable.
+struct DiskSSTableIterator<O, M> {
+    table: Arc<Mutex<InternalDiskSSTable>>,
+    mapper: M,
+    index: Option<Result<(Vec<ValueIndex>, Vec<ValueIndex>)>>,
+    pos: usize,
+    phant: PhantomData<O>
+}
+
+impl<O: Send, M: Mapper<O>> DiskSSTableIterator<O, M> {
+    fn new(table: Arc<Mutex<InternalDiskSSTable>>, mapper: M) -> Self {
         Self {
             table,
-            get_values,
+            mapper,
             index: None,
             pos: 0,
+            phant: Default::default(),
         }
     }
-    fn get_next(&mut self) -> Result<Option<(Vec<u8>, Option<Value>)>> {
+    fn get_next(&mut self) -> Result<Option<O>> {
         let table = Arc::clone(&self.table);
         let mut table = table.lock();
         let index = self
@@ -354,39 +379,27 @@ impl DiskSSTableIterator {
                     return Ok(None);
                 };
 
-                let key_buf = table.read_by_value_idx(key_idx)?;
-                let value_opt = if self.get_values {
-                    let value_buf = table.read_by_value_idx(&value_idx)?;
-                    Some(Value::decode(&value_buf))
-                } else {
-                    None
-                };
+                let mapped = self.mapper.map(&mut table, (key_idx, value_idx))?;
 
-
-                // let index = if let Some(idx) = key_idxs.get(self.pos) {
-                //     idx
-                // } else {
-                //     return Ok(None);
-                // };
-
-                // let key_buf = table.read_by_value_idx(index)?;
                 // let value_opt = if self.get_values {
-                //     let value_idx = table.read_value_idx()?;
                 //     let value_buf = table.read_by_value_idx(&value_idx)?;
                 //     Some(Value::decode(&value_buf))
                 // } else {
                 //     None
                 // };
+
+                // let key_buf = table.read_by_value_idx(key_idx)?;
+
                 self.pos += 1;
-                return Ok(Some((key_buf, value_opt)));
+                return Ok(Some(mapped));
             }
             Err(e) => Err(Error::Other(e.to_string())),
         }
     }
 }
 
-impl Iterator for DiskSSTableIterator {
-    type Item = Result<(Vec<u8>, Option<Value>)>;
+impl <O: Send, M: Mapper<O>> Iterator for DiskSSTableIterator<O, M> {
+    type Item = Result<O>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let next = self.get_next().transpose();
@@ -443,8 +456,8 @@ impl DiskSSTable {
         self.path.clone()
     }
 
-    pub fn iter_values(&self) -> DiskSSTableKeyValueIterator {
-        DiskSSTableKeyValueIterator{ inner: DiskSSTableIterator::new(Arc::clone(&self.inner), true)}
+    pub fn iter_key_values(&self) -> DiskSSTableKeyValueIterator {
+        DiskSSTableKeyValueIterator{ inner: DiskSSTableIterator::new(Arc::clone(&self.inner), KeyValueMapper{})}
     }
 
     // fn iter_keys(&self) -> DiskSSTableIterator {
@@ -520,12 +533,12 @@ mod test {
     #[test]
     fn is_able_to_iterate() {
         let ss_table = generate_disk();
-        let result = DiskSSTableIterator::new(Arc::new(Mutex::new(ss_table)), true)
+        let result = DiskSSTableIterator::new(Arc::new(Mutex::new(ss_table)), KeyValueMapper{})
             .map(|res| res.unwrap())
             .map(|(k, v)| {
                 (
                     String::from_utf8_lossy(&k).to_string(),
-                    v.unwrap().value_ref.to_string(),
+                    v.value_ref.to_string(),
                 )
             })
             .collect::<Vec<_>>();
@@ -537,7 +550,7 @@ mod test {
     #[test]
     fn is_able_to_iterate_values() {
         let ss_table = generate_disk();
-        let result = DiskSSTableKeyValueIterator{inner: DiskSSTableIterator::new(Arc::new(Mutex::new(ss_table)), true) }
+        let result = DiskSSTableKeyValueIterator{inner: DiskSSTableIterator::new(Arc::new(Mutex::new(ss_table)), KeyValueMapper{}) }
             .map(|res| res.unwrap())
             .map(|(k, v)| {
                 (
