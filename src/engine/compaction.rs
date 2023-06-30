@@ -1,22 +1,36 @@
-use std::{sync::mpsc::{sync_channel, SyncSender, Receiver}, thread::{JoinHandle, spawn}, collections::HashMap, path::PathBuf, fs::File, cmp::Ordering, iter::Peekable};
-use crate::{error::*, sstable::{DiskSSTable, DiskSSTableKeyValueIterator}};
 use super::CompactorCommand;
+use crate::{
+    error::*,
+    sstable::{DiskSSTable, DiskSSTableKeyValueIterator},
+};
+use std::{
+    cmp::Ordering,
+    collections::HashMap,
+    fs::File,
+    iter::Peekable,
+    path::PathBuf,
+    sync::mpsc::{sync_channel, Receiver, SyncSender},
+    thread::{spawn, JoinHandle},
+};
 
 pub trait CompactorFactory: Send {
-    fn start(&self, compactor_evt_rx: Receiver<CompactorCommand>) -> (Receiver<CompactorCommand>, JoinHandle<Result<()>>);
+    fn start(
+        &self,
+        compactor_evt_rx: Receiver<CompactorCommand>,
+    ) -> (Receiver<CompactorCommand>, JoinHandle<Result<()>>);
     fn clone(&self) -> Box<dyn CompactorFactory>;
 }
 
 struct SortedDiskSSTableKeyValueIterator {
     iters: Vec<Peekable<DiskSSTableKeyValueIterator>>,
-    order: Ordering
+    order: Ordering,
 }
 
 impl SortedDiskSSTableKeyValueIterator {
     fn new(iters: Vec<DiskSSTableKeyValueIterator>) -> Self {
         SortedDiskSSTableKeyValueIterator {
             iters: iters.into_iter().map(|it| it.peekable()).collect(),
-            order: Ordering::Less
+            order: Ordering::Less,
         }
     }
 }
@@ -28,22 +42,18 @@ impl Iterator for SortedDiskSSTableKeyValueIterator {
         let mut preferable_key: Option<(usize, &Vec<u8>)> = None;
         for (idx, iter) in self.iters.iter_mut().enumerate() {
             let peeked_key = match iter.peek() {
-                Some(Ok((peeked, _))) => {
-                    Some(peeked)
-                },
+                Some(Ok((peeked, _))) => Some(peeked),
                 Some(Err(e)) => {
                     return Some(Err(Error::Other(e.to_string())));
-                },
+                }
                 None => None,
             };
-            
-            let current_prefered_key = preferable_key.map(|(_, k)| {
-                k
-            });
+
+            let current_prefered_key = preferable_key.map(|(_, k)| k);
 
             if peeked_key.cmp(&current_prefered_key) == self.order || preferable_key.is_none() {
                 preferable_key = peeked_key.map(|k| (idx, k))
-            } 
+            }
         }
         if let Some((idx, _)) = preferable_key {
             if let Some(ref mut it) = self.iters.get_mut(idx) {
@@ -56,14 +66,14 @@ impl Iterator for SortedDiskSSTableKeyValueIterator {
 }
 
 /// Just merges sstables when there are X amount of them
-/// 
+///
 #[derive(Default)]
 struct SimpleCompactorState {
-    tracked_sstables: HashMap<PathBuf, DiskSSTable>
+    tracked_sstables: HashMap<PathBuf, DiskSSTable>,
 }
 
 impl SimpleCompactorState {
-    /// 
+    ///
     /// Returns a Vec<> of paths to delete as well as a new SSTable
     fn compact(&mut self) -> (Vec<PathBuf>, DiskSSTable) {
         let tracked = std::mem::take(&mut self.tracked_sstables)
@@ -76,13 +86,12 @@ impl SimpleCompactorState {
 
         //TODO need to refactor iterators, to take ownership
         todo!()
-
     }
 }
 
 #[derive(Clone, Copy)]
 struct SimpleCompactorConfig {
-    max_ss_tables: usize
+    max_ss_tables: usize,
 }
 
 impl Default for SimpleCompactorConfig {
@@ -91,45 +100,52 @@ impl Default for SimpleCompactorConfig {
     }
 }
 
-
 #[derive(Default)]
-pub struct SimpleCompactorFactory{config: SimpleCompactorConfig}
+pub struct SimpleCompactorFactory {
+    config: SimpleCompactorConfig,
+}
 
 impl CompactorFactory for SimpleCompactorFactory {
     fn clone(&self) -> Box<dyn CompactorFactory> {
         Box::new(Self {
-            config: self.config
+            config: self.config,
         })
     }
-    fn start(&self, compactor_evt_rx: Receiver<CompactorCommand>) -> (Receiver<CompactorCommand>, JoinHandle<Result<()>>) {
+    fn start(
+        &self,
+        compactor_evt_rx: Receiver<CompactorCommand>,
+    ) -> (Receiver<CompactorCommand>, JoinHandle<Result<()>>) {
         let (tx, rx) = sync_channel(1);
         let mut state = SimpleCompactorState::default();
         let config = self.config;
-        (rx, spawn(move || {
-            while let Ok(evt) = compactor_evt_rx.recv() {
-                match evt {
-                    CompactorCommand::NewSSTable(table) => {
-                        state.tracked_sstables.insert(table.path(), table);
-                        if state.tracked_sstables.len() >= config.max_ss_tables {
-                            let (to_delete, new_table) = state.compact();
-                            if let Err(_) = tx.send(CompactorCommand::NewSSTable(new_table)) {
-                                // log::info!("Closing")
-                                break;
-                            }
-                            if let Err(_) = tx.send(CompactorCommand::RemoveSSTables(to_delete)) {
-                                break;
+        (
+            rx,
+            spawn(move || {
+                while let Ok(evt) = compactor_evt_rx.recv() {
+                    match evt {
+                        CompactorCommand::NewSSTable(table) => {
+                            state.tracked_sstables.insert(table.path(), table);
+                            if state.tracked_sstables.len() >= config.max_ss_tables {
+                                let (to_delete, new_table) = state.compact();
+                                if let Err(_) = tx.send(CompactorCommand::NewSSTable(new_table)) {
+                                    // log::info!("Closing")
+                                    break;
+                                }
+                                if let Err(_) = tx.send(CompactorCommand::RemoveSSTables(to_delete))
+                                {
+                                    break;
+                                }
                             }
                         }
-                    },
-                    CompactorCommand::RemoveSSTables(paths) => {
-                        for path in paths {
-                            state.tracked_sstables.remove(&path);
+                        CompactorCommand::RemoveSSTables(paths) => {
+                            for path in paths {
+                                state.tracked_sstables.remove(&path);
+                            }
                         }
                     }
                 }
-            }
-            Ok(())
-        }))
+                Ok(())
+            }),
+        )
     }
 }
-

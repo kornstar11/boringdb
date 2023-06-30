@@ -11,6 +11,6 @@ use std::{
 
 //pub struct Recv
 
-pub struct LogQueue{
+pub struct LogQueue {
     path: PathBuf,
 }

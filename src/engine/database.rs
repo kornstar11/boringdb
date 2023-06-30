@@ -1,15 +1,15 @@
-use std::path::Path;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::thread::spawn;
-use std::{fs::File, path::PathBuf, time, collections::BTreeMap};
-use std::sync::mpsc::{sync_channel, SyncSender, Receiver};
 use parking_lot::Mutex;
+use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use std::sync::Arc;
+use std::thread::spawn;
+use std::{collections::BTreeMap, fs::File, path::PathBuf, time};
 
 use crate::{error::*, sstable::*};
 
-use super::CompactorCommand;
 use super::compaction::{CompactorFactory, SimpleCompactorFactory};
+use super::CompactorCommand;
 
 ///
 /// Engine handle managment of the SSTables. It is responsible for converting a memory SSTable into a disk SSTable.
@@ -20,7 +20,7 @@ const SSTABLE_FILE_PREFIX: &str = "sstable_";
 
 #[derive(Default)]
 pub struct DatabaseMetrics {
-    flushed_bytes: AtomicUsize
+    flushed_bytes: AtomicUsize,
 }
 
 pub struct DatabaseConfig {
@@ -32,11 +32,11 @@ pub struct DatabaseConfig {
 
 impl Clone for DatabaseConfig {
     fn clone(&self) -> Self {
-        Self { 
-            base_dir: self.base_dir.clone(), 
-            max_memory_bytes: self.max_memory_bytes.clone(), 
-            compactor_factory: self.compactor_factory.clone(), 
-            metrics: self.metrics.clone() 
+        Self {
+            base_dir: self.base_dir.clone(),
+            max_memory_bytes: self.max_memory_bytes.clone(),
+            compactor_factory: self.compactor_factory.clone(),
+            metrics: self.metrics.clone(),
         }
     }
 }
@@ -60,7 +60,6 @@ pub struct Database {
 }
 
 impl Database {
-
     pub fn start(config: DatabaseConfig) -> Arc<Mutex<Self>> {
         let (compactor_evt_tx, compactor_evt_rx) = sync_channel(1);
         let db = Self::new(config.clone(), compactor_evt_tx);
@@ -75,8 +74,7 @@ impl Database {
                 match evt {
                     CompactorCommand::NewSSTable(new) => {
                         db.add_sstable(new);
-
-                    },
+                    }
                     CompactorCommand::RemoveSSTables(to_drops) => {
                         for to_drop in to_drops {
                             db.remove_sstable(to_drop);
@@ -87,7 +85,6 @@ impl Database {
         });
 
         db
-
     }
 
     fn new(config: DatabaseConfig, compactor_evt_tx: SyncSender<CompactorCommand>) -> Database {
@@ -128,13 +125,13 @@ impl Database {
         let size = memory_sstable.as_ref().size()?;
         let disk_table = DiskSSTable::convert_mem(path.clone(), memory_sstable)?;
         // update compactor
-        self
-            .compactor_evt_tx
+        self.compactor_evt_tx
             .send(CompactorCommand::NewSSTable(disk_table.clone()))
             .map_err(|_| Error::SendError)?;
         self.add_sstable(disk_table);
-        Arc::clone(&self.config.metrics).flushed_bytes.fetch_add(size, Ordering::Relaxed);
-
+        Arc::clone(&self.config.metrics)
+            .flushed_bytes
+            .fetch_add(size, Ordering::Relaxed);
 
         Ok(())
     }
@@ -211,12 +208,29 @@ mod test {
         engine.put(b"key2".to_vec(), b"value2".to_vec()).unwrap();
         engine.put(b"key3".to_vec(), b"value3".to_vec()).unwrap();
         engine.put(b"key4".to_vec(), b"value4".to_vec()).unwrap();
-        assert_eq!(metrics.flushed_bytes.load(std::sync::atomic::Ordering::SeqCst), 30);
+        assert_eq!(
+            metrics
+                .flushed_bytes
+                .load(std::sync::atomic::Ordering::SeqCst),
+            30
+        );
 
-        assert_eq!(engine.get(&b"key1".to_vec()).unwrap().unwrap(), b"value1".to_vec());
-        assert_eq!(engine.get(&b"key2".to_vec()).unwrap().unwrap(), b"value2".to_vec());
-        assert_eq!(engine.get(&b"key3".to_vec()).unwrap().unwrap(), b"value3".to_vec());
-        assert_eq!(engine.get(&b"key4".to_vec()).unwrap().unwrap(), b"value4".to_vec());
+        assert_eq!(
+            engine.get(&b"key1".to_vec()).unwrap().unwrap(),
+            b"value1".to_vec()
+        );
+        assert_eq!(
+            engine.get(&b"key2".to_vec()).unwrap().unwrap(),
+            b"value2".to_vec()
+        );
+        assert_eq!(
+            engine.get(&b"key3".to_vec()).unwrap().unwrap(),
+            b"value3".to_vec()
+        );
+        assert_eq!(
+            engine.get(&b"key4".to_vec()).unwrap().unwrap(),
+            b"value4".to_vec()
+        );
 
         let evt = compactor_evt_rx.recv().unwrap();
         let evt_is_new_sstable = if let CompactorCommand::NewSSTable(_) = evt {
@@ -226,6 +240,5 @@ mod test {
         };
 
         assert!(evt_is_new_sstable);
-
     }
 }
