@@ -29,14 +29,15 @@ struct SimpleCompactorState {
 impl SimpleCompactorState {
     ///
     /// Returns a Vec<> of paths to delete as well as a new SSTable
-    fn compact(&mut self) -> (Vec<PathBuf>, DiskSSTable) {
+    fn compact(&mut self) -> Result<(Vec<PathBuf>, DiskSSTable)> {
         let tracked = std::mem::take(&mut self.tracked_sstables)
             .into_values()
             .collect::<Vec<_>>();
         let iters = tracked.iter()
             .map(|table| table.iter_key_idxs())
             .collect::<Vec<_>>();
-        let sorted_iter = SortedDiskSSTableKeyValueIterator::new(iters);
+        let sorted_iter = SortedDiskSSTableKeyValueIterator::new(iters).collect::<Result<Vec<_>>>()?;
+        //TODO Iterator to pull ValueIndex from Vec<DiskSSTable>       
 
         //let mut left_to_iter = tracked.len();
 
