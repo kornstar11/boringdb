@@ -118,7 +118,7 @@ type KeyIdxIt = DiskSSTableIterator<(Vec<u8>, (ValueIndex, ValueIndex)), KeyInde
 ///
 /// Iterator takes multiple Iterators from multiple sstables and returns a tuple:
 /// (sstable_index, KeyIndex), (sstable_index, ValueIndex)
-struct SortedDiskSSTableKeyValueIterator {
+pub struct SortedDiskSSTableKeyValueIterator {
     iters: Vec<Peekable<KeyIdxIt>>,
     order: Ordering,
 }

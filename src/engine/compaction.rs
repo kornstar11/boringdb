@@ -1,7 +1,7 @@
 use super::CompactorCommand;
 use crate::{
     error::*,
-    sstable::DiskSSTable,
+    sstable::{DiskSSTable, SortedDiskSSTableKeyValueIterator},
 };
 use std::{
     collections::HashMap,
@@ -32,9 +32,11 @@ impl SimpleCompactorState {
     fn compact(&mut self) -> (Vec<PathBuf>, DiskSSTable) {
         let tracked = std::mem::take(&mut self.tracked_sstables)
             .into_values()
-            .map(|table| table.iter_key_values())
             .collect::<Vec<_>>();
-        //let sorted_iter = SortedDiskSSTableKeyValueIterator::new(tracked);
+        let iters = tracked.iter()
+            .map(|table| table.iter_key_idxs())
+            .collect::<Vec<_>>();
+        let sorted_iter = SortedDiskSSTableKeyValueIterator::new(iters);
 
         //let mut left_to_iter = tracked.len();
 

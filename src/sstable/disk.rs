@@ -9,7 +9,7 @@ use std::{
     sync::Arc,
 };
 
-use super::{memory::Memtable, SSTable, ValueRef, mappers::{KeyValueMapper}, KeyMapper, ValueMapper, DiskSSTableIterator, DiskSSTableKeyValueIterator};
+use super::{memory::Memtable, SSTable, ValueRef, mappers::{KeyValueMapper, KeyIndexMapper}, KeyMapper, ValueMapper, DiskSSTableIterator, DiskSSTableKeyValueIterator};
 
 #[derive(Debug, Copy, Clone)]
 pub struct ValueIndex {
@@ -328,6 +328,10 @@ impl DiskSSTable {
         )
     }
 
+    pub fn iter_key_idxs(&self) -> DiskSSTableIterator<(Vec<u8>, (ValueIndex, ValueIndex)), KeyIndexMapper> {
+        DiskSSTableIterator::new(Arc::clone(&self.inner), KeyIndexMapper {})
+    }
+
     pub fn iter_key(&self) -> DiskSSTableIterator<Vec<u8>, KeyMapper> {
         DiskSSTableIterator::new(Arc::clone(&self.inner), KeyMapper {})
     }
@@ -335,9 +339,6 @@ impl DiskSSTable {
         DiskSSTableIterator::new(Arc::clone(&self.inner), ValueMapper {})
     }
 
-    // fn iter_keys(&self) -> DiskSSTableIterator {
-    //     DiskSSTableIterator::new(Arc::clone(&self.inner), false)
-    // }
 }
 
 impl SSTable<Vec<u8>> for DiskSSTable {

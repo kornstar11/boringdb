@@ -187,7 +187,6 @@ impl Database {
 #[cfg(test)]
 mod test {
     use std::sync::{
-        atomic::{AtomicU64, AtomicUsize},
         Arc,
     };
 
@@ -195,7 +194,6 @@ mod test {
 
     #[test]
     fn flushes_data_to_disk_when_mem_size() {
-        let flushed = Arc::new(AtomicUsize::new(0));
         let (compactor_evt_tx, compactor_evt_rx) = sync_channel(1);
         let metrics = Arc::new(DatabaseMetrics::default());
         let config = DatabaseConfig {

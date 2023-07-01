@@ -8,7 +8,7 @@ use std::fmt::Display;
 use crate::error::*;
 pub use mappers::{KeyMapper, ValueMapper};
 pub use crate::sstable::disk::{DiskSSTable, Value};
-pub use crate::sstable::iter::{DiskSSTableKeyValueIterator, DiskSSTableIterator};
+pub use crate::sstable::iter::{DiskSSTableKeyValueIterator, DiskSSTableIterator, SortedDiskSSTableKeyValueIterator};
 pub use crate::sstable::memory::Memtable;
 #[derive(Debug)]
 pub enum ValueRef {
