@@ -5,12 +5,11 @@ use std::{
     cmp::Ordering,
     fs::{File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
-    marker::PhantomData,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
-use super::{memory::Memtable, SSTable, ValueRef, mappers::{Mapper, KeyValueMapper}, KeyMapper, ValueMapper};
+use super::{memory::Memtable, SSTable, ValueRef, mappers::{KeyValueMapper}, KeyMapper, ValueMapper, DiskSSTableIterator, DiskSSTableKeyValueIterator};
 
 #[derive(Debug, Copy, Clone)]
 pub struct ValueIndex {
@@ -49,7 +48,7 @@ impl ValuesToPositions {
 
 #[derive(Debug)]
 pub struct Value {
-    value_ref: ValueRef,
+    pub value_ref: ValueRef,
 }
 
 impl Value {
@@ -146,7 +145,7 @@ impl InternalDiskSSTable {
     }
     ///
     /// Returns the positions of the sorted keys and their length
-    fn read_key_index(&mut self) -> Result<(Vec<ValueIndex>, Vec<ValueIndex>)> {
+    pub fn read_key_index(&mut self) -> Result<(Vec<ValueIndex>, Vec<ValueIndex>)> {
         let number_of_keys = self.read_number_of_keys()?;
         let mut key_idxs = vec![];
         let mut value_idxs = vec![];
@@ -271,107 +270,6 @@ impl InternalDiskSSTable {
     }
 }
 
-pub struct DiskSSTableKeyValueIterator {
-    inner: DiskSSTableIterator<(Vec<u8>, Value), KeyValueMapper>,
-}
-
-impl DiskSSTableKeyValueIterator {
-    fn get_next(&mut self) -> Option<Result<Option<(Vec<u8>, Vec<u8>)>>> {
-        match self.inner.next() {
-            Some(Ok((
-                k,
-                Value {
-                    value_ref: ValueRef::MemoryRef(data),
-                },
-            ))) => Some(Ok(Some((k, data)))),
-            Some(Ok((
-                _,
-                Value {
-                    value_ref: ValueRef::Tombstone,
-                },
-            ))) => Some(Ok(None)),
-            Some(Err(e)) => Some(Err(e)),
-            _ => None,
-        }
-    }
-}
-
-impl Iterator for DiskSSTableKeyValueIterator {
-    type Item = Result<(Vec<u8>, Vec<u8>)>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        while let Some(next) = self.get_next() {
-            match next {
-                Ok(Some((k, v))) => {
-                    return Some(Ok((k, v)));
-                }
-                Err(e) => {
-                    return Some(Err(e));
-                }
-                Ok(None) => { /* loop again */ }
-            }
-        }
-        return None;
-    }
-}
-
-
-///
-/// Iterator over all keys and optionally values in InternalDiskSSTable.
-pub struct DiskSSTableIterator<O, M> {
-    table: Arc<Mutex<InternalDiskSSTable>>,
-    mapper: M,
-    index: Option<Result<(Vec<ValueIndex>, Vec<ValueIndex>)>>,
-    pos: usize,
-    phant: PhantomData<O>,
-}
-
-impl<O: Send, M: Mapper<O>> DiskSSTableIterator<O, M> {
-    fn new(table: Arc<Mutex<InternalDiskSSTable>>, mapper: M) -> Self {
-        Self {
-            table,
-            mapper,
-            index: None,
-            pos: 0,
-            phant: Default::default(),
-        }
-    }
-    fn get_next(&mut self) -> Result<Option<O>> {
-        let table = Arc::clone(&self.table);
-        let mut table = table.lock();
-        let index = self.index.get_or_insert_with(|| table.read_key_index());
-
-        match index {
-            Ok((key_idxs, value_idxs)) => {
-                let kv_opt = key_idxs.get(self.pos).and_then(|key_idx| {
-                    value_idxs
-                        .get(self.pos)
-                        .map(move |value_idx| (key_idx, value_idx))
-                });
-                let (key_idx, value_idx) = if let Some(kv) = kv_opt {
-                    kv
-                } else {
-                    return Ok(None);
-                };
-
-                let mapped = self.mapper.map(&mut table, (key_idx, value_idx))?;
-
-                self.pos += 1;
-                return Ok(Some(mapped));
-            }
-            Err(e) => Err(Error::Other(e.to_string())),
-        }
-    }
-}
-
-impl<O: Send, M: Mapper<O>> Iterator for DiskSSTableIterator<O, M> {
-    type Item = Result<O>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let next = self.get_next().transpose();
-        next
-    }
-}
 ///
 /// Outward facing interface of the sstable, allows for cloning, and is a central point to control the mutex.
 #[derive(Clone)]
@@ -425,9 +323,9 @@ impl DiskSSTable {
     }
 
     pub fn iter_key_values(&self) -> DiskSSTableKeyValueIterator {
-        DiskSSTableKeyValueIterator {
-            inner: DiskSSTableIterator::new(Arc::clone(&self.inner), KeyValueMapper {}),
-        }
+        DiskSSTableKeyValueIterator::new (
+            DiskSSTableIterator::new(Arc::clone(&self.inner), KeyValueMapper {}),
+        )
     }
 
     pub fn iter_key(&self) -> DiskSSTableIterator<Vec<u8>, KeyMapper> {
@@ -455,7 +353,7 @@ impl SSTable<Vec<u8>> for DiskSSTable {
 #[cfg(test)]
 mod test {
     use crate::sstable::MutSSTable;
-
+    
     use super::*;
 
     fn generate_kvs() -> Box<dyn Iterator<Item = (String, String)>> {
@@ -526,9 +424,9 @@ mod test {
     #[test]
     fn is_able_to_iterate_values() {
         let ss_table = generate_disk();
-        let result = DiskSSTableKeyValueIterator {
-            inner: DiskSSTableIterator::new(Arc::new(Mutex::new(ss_table)), KeyValueMapper {}),
-        }
+        let result = DiskSSTableKeyValueIterator::new(
+            DiskSSTableIterator::new(Arc::new(Mutex::new(ss_table)), KeyValueMapper {}),
+        )
         .map(|res| res.unwrap())
         .map(|(k, v)| {
             (

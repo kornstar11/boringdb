@@ -23,6 +23,23 @@ impl Mapper<(Vec<u8>, Value)> for KeyValueMapper {
     }
 }
 
+//
+/// KeyIndex Mappers
+pub struct KeyIndexMapper;
+
+impl Mapper<(Vec<u8>, (ValueIndex, ValueIndex))> for KeyIndexMapper {
+    fn map(
+        &self,
+        table: &mut InternalDiskSSTable,
+        kv_idxs: (&ValueIndex, &ValueIndex),
+    ) -> Result<(Vec<u8>, (ValueIndex, ValueIndex))> {
+        let (key_idx, value_idx) = kv_idxs;
+        let key_buf = table.read_by_value_idx(key_idx)?;
+        Ok((key_buf, (key_idx.to_owned(), value_idx.to_owned())))
+    }
+}
+
+
 ///
 /// KeyMapper
 pub struct KeyMapper;

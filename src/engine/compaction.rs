@@ -6,10 +6,9 @@ use crate::{
 use std::{
     cmp::Ordering,
     collections::HashMap,
-    fs::File,
     iter::Peekable,
     path::PathBuf,
-    sync::mpsc::{sync_channel, Receiver, SyncSender},
+    sync::mpsc::{sync_channel, Receiver},
     thread::{spawn, JoinHandle},
 };
 
