@@ -83,7 +83,7 @@ impl CompactorFactory for SimpleCompactorFactory {
                         CompactorCommand::NewSSTable(table) => {
                             state.tracked_sstables.insert(table.path(), table);
                             if state.tracked_sstables.len() >= config.max_ss_tables {
-                                let (to_delete, new_table) = state.compact();
+                                let (to_delete, new_table) = state.compact().unwrap();
                                 if let Err(_) = tx.send(CompactorCommand::NewSSTable(new_table)) {
                                     // log::info!("Closing")
                                     break;
