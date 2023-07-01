@@ -1,8 +1,8 @@
-use std::{sync::Arc, marker::PhantomData};
+use std::{sync::Arc, marker::PhantomData, iter::Peekable, cmp::Ordering};
 
 use parking_lot::Mutex;
 
-use super::{mappers::{Mapper, KeyValueMapper}, Value, ValueRef, disk::{InternalDiskSSTable, ValueIndex}};
+use super::{mappers::{Mapper, KeyValueMapper, KeyIndexMapper}, Value, ValueRef, disk::{InternalDiskSSTable, ValueIndex}};
 use crate::error::*;
 
 
@@ -110,5 +110,59 @@ impl<O: Send, M: Mapper<O>> Iterator for DiskSSTableIterator<O, M> {
     fn next(&mut self) -> Option<Self::Item> {
         let next = self.get_next().transpose();
         next
+    }
+}
+
+type KeyIdxIt = DiskSSTableIterator<(Vec<u8>, (ValueIndex, ValueIndex)), KeyIndexMapper>;
+
+///
+/// Iterator takes multiple Iterators from multiple sstables and returns a tuple:
+/// (sstable_index, KeyIndex), (sstable_index, ValueIndex)
+struct SortedDiskSSTableKeyValueIterator {
+    iters: Vec<Peekable<KeyIdxIt>>,
+    order: Ordering,
+}
+
+impl SortedDiskSSTableKeyValueIterator {
+    pub fn new(iters: Vec<KeyIdxIt>) -> Self {
+        SortedDiskSSTableKeyValueIterator {
+            iters: iters.into_iter().map(|it| it.peekable()).collect(),
+            order: Ordering::Less,
+        }
+    }
+}
+
+impl Iterator for SortedDiskSSTableKeyValueIterator {
+    type Item = Result<((usize, ValueIndex), (usize, ValueIndex))>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut preferable_key: Option<(usize, &Vec<u8>)> = None;
+        for (idx, iter) in self.iters.iter_mut().enumerate() {
+            let peeked_key = match iter.peek() {
+                Some(Ok((peeked, _))) => Some(peeked),
+                Some(Err(e)) => {
+                    return Some(Err(Error::Other(e.to_string())));
+                }
+                None => None,
+            };
+
+            let current_prefered_key = preferable_key.map(|(_, k)| k);
+
+            if peeked_key.cmp(&current_prefered_key) == self.order || preferable_key.is_none() {
+                preferable_key = peeked_key.map(|k| (idx, k))
+            }
+        }
+        if let Some((idx, _)) = preferable_key {
+            if let Some(ref mut it) = self.iters.get_mut(idx) {
+                return it.next().map(|res| 
+                    res.map(|t| {
+                        let (_, (ki, vi)) = t;
+                        ((idx, ki), (idx, vi))
+                    })
+                );
+            }
+        }
+
+        None
     }
 }

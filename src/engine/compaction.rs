@@ -1,12 +1,10 @@
 use super::CompactorCommand;
 use crate::{
     error::*,
-    sstable::{DiskSSTable, DiskSSTableKeyValueIterator},
+    sstable::DiskSSTable,
 };
 use std::{
-    cmp::Ordering,
     collections::HashMap,
-    iter::Peekable,
     path::PathBuf,
     sync::mpsc::{sync_channel, Receiver},
     thread::{spawn, JoinHandle},
@@ -20,49 +18,6 @@ pub trait CompactorFactory: Send {
     fn clone(&self) -> Box<dyn CompactorFactory>;
 }
 
-struct SortedDiskSSTableKeyValueIterator {
-    iters: Vec<Peekable<DiskSSTableKeyValueIterator>>,
-    order: Ordering,
-}
-
-impl SortedDiskSSTableKeyValueIterator {
-    fn new(iters: Vec<DiskSSTableKeyValueIterator>) -> Self {
-        SortedDiskSSTableKeyValueIterator {
-            iters: iters.into_iter().map(|it| it.peekable()).collect(),
-            order: Ordering::Less,
-        }
-    }
-}
-
-impl Iterator for SortedDiskSSTableKeyValueIterator {
-    type Item = Result<(Vec<u8>, Vec<u8>)>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let mut preferable_key: Option<(usize, &Vec<u8>)> = None;
-        for (idx, iter) in self.iters.iter_mut().enumerate() {
-            let peeked_key = match iter.peek() {
-                Some(Ok((peeked, _))) => Some(peeked),
-                Some(Err(e)) => {
-                    return Some(Err(Error::Other(e.to_string())));
-                }
-                None => None,
-            };
-
-            let current_prefered_key = preferable_key.map(|(_, k)| k);
-
-            if peeked_key.cmp(&current_prefered_key) == self.order || preferable_key.is_none() {
-                preferable_key = peeked_key.map(|k| (idx, k))
-            }
-        }
-        if let Some((idx, _)) = preferable_key {
-            if let Some(ref mut it) = self.iters.get_mut(idx) {
-                return it.next();
-            }
-        }
-
-        None
-    }
-}
 
 /// Just merges sstables when there are X amount of them
 ///
@@ -79,7 +34,7 @@ impl SimpleCompactorState {
             .into_values()
             .map(|table| table.iter_key_values())
             .collect::<Vec<_>>();
-        let sorted_iter = SortedDiskSSTableKeyValueIterator::new(tracked);
+        //let sorted_iter = SortedDiskSSTableKeyValueIterator::new(tracked);
 
         //let mut left_to_iter = tracked.len();
 
