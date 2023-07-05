@@ -133,7 +133,7 @@ impl SortedDiskSSTableKeyValueIterator {
 }
 
 impl Iterator for SortedDiskSSTableKeyValueIterator {
-    type Item = Result<((usize, ValueIndex), (usize, ValueIndex))>;
+    type Item = Result<(Vec<u8>, (usize, ValueIndex), (usize, ValueIndex))>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut preferable_key: Option<(usize, &Vec<u8>)> = None;
@@ -148,21 +148,94 @@ impl Iterator for SortedDiskSSTableKeyValueIterator {
 
             let current_prefered_key = preferable_key.map(|(_, k)| k);
 
-            if peeked_key.cmp(&current_prefered_key) == self.order || preferable_key.is_none() {
-                preferable_key = peeked_key.map(|k| (idx, k))
+            if peeked_key.is_some() && (peeked_key.cmp(&current_prefered_key) == self.order || preferable_key.is_none())  {
+                preferable_key = peeked_key.map(|k| {
+                    (idx, k)
+                })
+
             }
         }
-        if let Some((idx, _)) = preferable_key {
+        if let Some((idx, k)) = preferable_key {
             if let Some(ref mut it) = self.iters.get_mut(idx) {
-                return it.next().map(|res| 
+                let result = it.next();
+                return result.map(|res| 
                     res.map(|t| {
-                        let (_, (ki, vi)) = t;
-                        ((idx, ki), (idx, vi))
+                        let (k, (ki, vi)) = t;
+                        (k, (idx, ki), (idx, vi))
                     })
                 );
             }
         }
 
         None
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::sstable::{Memtable, MutSSTable};
+
+    use super::*;
+
+    fn generate_kvs() -> Box<dyn Iterator<Item = (String, String)>> {
+        Box::new((0..10).map(|i| (format!("k{}", i), format!("v{}", i))))
+    }
+
+    fn generate_even_kvs() -> Box<dyn Iterator<Item = (String, String)>> {
+        Box::new((0..10).filter(|x| x % 2 == 0).map(|i| (format!("k{}", i), format!("v{}", i))))
+    }
+    fn generate_odd_kvs() -> Box<dyn Iterator<Item = (String, String)>> {
+        Box::new((0..10).filter(|x| x % 2 == 1).map(|i| (format!("k{}", i), format!("v{}", i))))
+    }
+
+    fn generate_memory(it: Box<dyn Iterator<Item = (String, String)>>) -> Memtable {
+        let mut memory = Memtable::default();
+        for (k, v) in it {
+            memory.put(k.as_bytes().to_vec(), v.as_bytes().to_vec());
+        }
+        memory
+    }
+    fn generate_disk(memory: Memtable) -> InternalDiskSSTable {
+        let file = tempfile::tempfile().unwrap();
+        println!("file: {:?}", file);
+        InternalDiskSSTable::encode_inmemory_sstable(memory, file).unwrap()
+    }
+    #[test]
+    fn match_with_one_it() {
+        let it = generate_disk(generate_memory(generate_kvs()));
+        let it = DiskSSTableIterator::new(Arc::new(Mutex::new(it)), KeyIndexMapper{});
+        let sorted = SortedDiskSSTableKeyValueIterator::new(vec![it]);
+        let sorted: Result<Vec<_>> = sorted.collect();
+        let sorted = sorted
+            .unwrap()
+            .into_iter()
+            .map(|x| String::from_utf8(x.0).unwrap())
+            .collect::<Vec<_>>();
+        println!("{:?}", sorted);
+        assert_eq!(sorted, vec!["k0", "k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8", "k9"])
+
+    }
+
+    #[test]
+    fn sorted_disk_iter_can_sort_multiple() {
+        let even = generate_disk(generate_memory(generate_even_kvs()));
+        let even = DiskSSTableIterator::new(Arc::new(Mutex::new(even)), KeyIndexMapper{});
+        let odd = generate_disk(generate_memory(generate_odd_kvs()));
+        let odd = DiskSSTableIterator::new(Arc::new(Mutex::new(odd)), KeyIndexMapper{});
+
+        let sorted = SortedDiskSSTableKeyValueIterator::new(vec![odd, even]);
+
+        let sorted: Result<Vec<_>> = sorted.collect();
+        let sorted = sorted
+            .unwrap()
+            .into_iter()
+            .map(|x| String::from_utf8(x.0).unwrap())
+            .collect::<Vec<_>>();
+        println!("{:?}", sorted);
+
+        assert_eq!(sorted, vec!["k0", "k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8", "k9"])
+
+
+
     }
 }
