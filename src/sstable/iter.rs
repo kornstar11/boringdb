@@ -133,7 +133,7 @@ impl SortedDiskSSTableKeyValueIterator {
 }
 
 impl Iterator for SortedDiskSSTableKeyValueIterator {
-    type Item = Result<(Vec<u8>, (usize, ValueIndex), (usize, ValueIndex))>;
+    type Item = Result<(Vec<u8>, usize, ValueIndex, ValueIndex)>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut preferable_key: Option<(usize, &Vec<u8>)> = None;
@@ -155,13 +155,13 @@ impl Iterator for SortedDiskSSTableKeyValueIterator {
 
             }
         }
-        if let Some((idx, k)) = preferable_key {
+        if let Some((idx, _)) = preferable_key {
             if let Some(ref mut it) = self.iters.get_mut(idx) {
                 let result = it.next();
                 return result.map(|res| 
                     res.map(|t| {
                         let (k, (ki, vi)) = t;
-                        (k, (idx, ki), (idx, vi))
+                        (k, idx, ki, vi)
                     })
                 );
             }
@@ -170,6 +170,8 @@ impl Iterator for SortedDiskSSTableKeyValueIterator {
         None
     }
 }
+
+
 
 #[cfg(test)]
 mod test {

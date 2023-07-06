@@ -105,7 +105,7 @@ pub struct InternalDiskSSTable {
 impl InternalDiskSSTable {
     pub fn encode_it(
         keys: impl Iterator<Item = Vec<u8>>,
-        values: impl Iterator<Item = ValueRef>,
+        values: impl Iterator<Item = Result<ValueRef>>,
         mut file: File,
     ) -> Result<InternalDiskSSTable> {
         let mut values_to_position = ValuesToPositions::default();
@@ -121,7 +121,7 @@ impl InternalDiskSSTable {
         file: File,
     ) -> Result<InternalDiskSSTable> {
         let (keys, values) = memory_sstable.into_key_values();
-        Self::encode_it(keys.into_iter(), values.into_iter(), file)
+        Self::encode_it(keys.into_iter(), values.into_iter().map(Ok), file)
     }
 
     fn read_u64(&mut self) -> Result<u64> {
@@ -161,6 +161,11 @@ impl InternalDiskSSTable {
         self.file.seek(SeekFrom::Start(idx.pos as u64))?;
         let key_buf = self.read_bytes(idx.len)?;
         Ok(key_buf)
+    }
+
+    pub fn read_value_by_value_idx(&mut self, idx: &ValueIndex) -> Result<Value> {
+        let value_buf = self.read_by_value_idx(&idx)?;
+        Ok(Value::decode(&value_buf))
     }
 
     fn read_value_idx(&mut self) -> Result<ValueIndex> {
@@ -203,11 +208,10 @@ impl InternalDiskSSTable {
     fn get_value(&mut self, k: &[u8]) -> Result<Option<Vec<u8>>> {
         let value_idx = self.search_key_positions(k)?;
         match value_idx {
-            Some(value_idx) => {
-                let value_buf = self.read_by_value_idx(&value_idx)?;
+            Some(ref value_idx) => {
                 if let Value {
                     value_ref: ValueRef::MemoryRef(value),
-                } = Value::decode(&value_buf)
+                } = self.read_value_by_value_idx(value_idx)?
                 {
                     return Ok(Some(value));
                 }
@@ -251,11 +255,12 @@ impl InternalDiskSSTable {
     }
 
     fn encode_values(
-        values: impl Iterator<Item = ValueRef>,
+        values: impl Iterator<Item = Result<ValueRef>>,
         file: &mut File,
         values_to_position: &mut ValuesToPositions,
     ) -> Result<()> {
-        for value_ref in values {
+        for value_ref_res in values {
+            let value_ref = value_ref_res?;
             let mut buf = BytesMut::new();
             let value = Value { value_ref };
             value.encode(&mut buf);
@@ -280,6 +285,14 @@ pub struct DiskSSTable {
 
 impl DiskSSTable {
     pub fn convert_mem<P: AsRef<Path>>(path: P, memory_sstable: Memtable) -> Result<DiskSSTable> {
+        let (keys, values) = memory_sstable.into_key_values();
+        Self::convert_from_iter(path, keys.into_iter(), values.into_iter().map(Ok))
+    }
+
+    pub fn convert_from_iter<P: AsRef<Path>>(
+        path: P, 
+        keys: impl Iterator<Item = Vec<u8>>,
+        values: impl Iterator<Item = Result<ValueRef>>,) -> Result<DiskSSTable> {
         let file = {
             OpenOptions::new()
                 .read(true)
@@ -287,7 +300,7 @@ impl DiskSSTable {
                 .create_new(true)
                 .open(path.as_ref())?
         };
-        let inner = InternalDiskSSTable::encode_inmemory_sstable(memory_sstable, file)?;
+        let inner = InternalDiskSSTable::encode_it(keys, values, file)?;
         Ok(DiskSSTable {
             path: path.as_ref().to_path_buf(),
             inner: Arc::new(Mutex::new(inner)),
@@ -320,6 +333,10 @@ impl DiskSSTable {
 
     pub fn path(&self) -> PathBuf {
         self.path.clone()
+    }
+
+    pub fn read_value_by_value_idx(&self, idx: &ValueIndex) -> Result<Value> {
+        self.inner.lock().read_value_by_value_idx(idx)
     }
 
     pub fn iter_key_values(&self) -> DiskSSTableKeyValueIterator {

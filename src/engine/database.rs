@@ -22,12 +22,25 @@ const SSTABLE_FILE_PREFIX: &str = "sstable_";
 pub struct DatabaseMetrics {
     flushed_bytes: AtomicUsize,
 }
-
 pub struct DatabaseConfig {
     pub base_dir: PathBuf,
     pub max_memory_bytes: u64,
     pub compactor_factory: Box<dyn CompactorFactory>,
     pub metrics: Arc<DatabaseMetrics>,
+}
+
+impl DatabaseConfig {
+    pub fn sstable_path(&self) -> Result<PathBuf> {
+        let time = time::SystemTime::now()
+            .duration_since(time::UNIX_EPOCH)
+            .map_err(Error::TimeError)?
+            .as_micros();
+        let mut path = self.base_dir.clone();
+        path.push(format!("{}{}.data", SSTABLE_FILE_PREFIX, time));
+
+        Ok(path)
+    }
+    
 }
 
 impl Clone for DatabaseConfig {
@@ -113,13 +126,9 @@ impl Database {
     /// Flush memtable to disk and add the new disktable to our stack of disktables.
     ///
     fn flush_to_disk(&mut self) -> Result<()> {
-        let time = time::SystemTime::now()
-            .duration_since(time::UNIX_EPOCH)
-            .map_err(Error::TimeError)?
-            .as_micros();
+        
         // make path
-        let mut path = self.config.base_dir.clone();
-        path.push(format!("{}{}.data", SSTABLE_FILE_PREFIX, time));
+        let mut path = self.config.sstable_path()?;
 
         let memory_sstable = std::mem::take(&mut self.memtable);
         let size = memory_sstable.as_ref().size()?;

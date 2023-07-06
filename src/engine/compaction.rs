@@ -1,4 +1,4 @@
-use super::CompactorCommand;
+use super::{CompactorCommand, database::DatabaseConfig};
 use crate::{
     error::*,
     sstable::{DiskSSTable, SortedDiskSSTableKeyValueIterator},
@@ -23,6 +23,7 @@ pub trait CompactorFactory: Send {
 ///
 #[derive(Default)]
 struct SimpleCompactorState {
+    config: DatabaseConfig,
     tracked_sstables: HashMap<PathBuf, DiskSSTable>,
 }
 
@@ -30,19 +31,28 @@ impl SimpleCompactorState {
     ///
     /// Returns a Vec<> of paths to delete as well as a new SSTable
     fn compact(&mut self) -> Result<(Vec<PathBuf>, DiskSSTable)> {
-        let tracked = std::mem::take(&mut self.tracked_sstables)
+        let mut to_merge = std::mem::take(&mut self.tracked_sstables)
             .into_values()
             .collect::<Vec<_>>();
-        let iters = tracked.iter()
+        let iters = to_merge.iter()
             .map(|table| table.iter_key_idxs())
             .collect::<Vec<_>>();
         let sorted_iter = SortedDiskSSTableKeyValueIterator::new(iters).collect::<Result<Vec<_>>>()?;
-        //TODO Iterator to pull ValueIndex from Vec<DiskSSTable>       
-
-        //let mut left_to_iter = tracked.len();
-
-        //TODO need to refactor iterators, to take ownership
-        todo!()
+        let key_it = sorted_iter
+            .iter()
+            .map(|(k, _, _, _)| {k.to_vec()});
+        let value_it = sorted_iter
+            .iter()
+            .map(|(_, idx, _, vidx)| {
+                if let Some(table) = to_merge.get_mut(*idx) {
+                    table.read_value_by_value_idx(&vidx).map(|v| v.value_ref)
+                } else {
+                    Err(Error::Other(String::from("unable to locate indexed table.")))
+                }
+            });
+        let path = self.config.sstable_path()?;
+        let new_ss_table = DiskSSTable::convert_from_iter(path, key_it, value_it)?;
+        Ok((to_merge.into_iter().map(|table| table.path()).collect(), new_ss_table))
     }
 }
 
