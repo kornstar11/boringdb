@@ -113,6 +113,8 @@ impl<O: Send, M: Mapper<O>> Iterator for DiskSSTableIterator<O, M> {
     }
 }
 
+//pub struct
+
 type KeyIdxIt = DiskSSTableIterator<(Vec<u8>, (ValueIndex, ValueIndex)), KeyIndexMapper>;
 
 ///
@@ -178,30 +180,8 @@ mod test {
     use crate::sstable::{Memtable, MutSSTable};
 
     use super::*;
+    use crate::sstable::test::*;
 
-    fn generate_kvs() -> Box<dyn Iterator<Item = (String, String)>> {
-        Box::new((0..10).map(|i| (format!("k{}", i), format!("v{}", i))))
-    }
-
-    fn generate_even_kvs() -> Box<dyn Iterator<Item = (String, String)>> {
-        Box::new((0..10).filter(|x| x % 2 == 0).map(|i| (format!("k{}", i), format!("v{}", i))))
-    }
-    fn generate_odd_kvs() -> Box<dyn Iterator<Item = (String, String)>> {
-        Box::new((0..10).filter(|x| x % 2 == 1).map(|i| (format!("k{}", i), format!("v{}", i))))
-    }
-
-    fn generate_memory(it: Box<dyn Iterator<Item = (String, String)>>) -> Memtable {
-        let mut memory = Memtable::default();
-        for (k, v) in it {
-            memory.put(k.as_bytes().to_vec(), v.as_bytes().to_vec());
-        }
-        memory
-    }
-    fn generate_disk(memory: Memtable) -> InternalDiskSSTable {
-        let file = tempfile::tempfile().unwrap();
-        println!("file: {:?}", file);
-        InternalDiskSSTable::encode_inmemory_sstable(memory, file).unwrap()
-    }
     #[test]
     fn match_with_one_it() {
         let it = generate_disk(generate_memory(generate_kvs()));

@@ -373,29 +373,34 @@ mod test {
     use crate::sstable::MutSSTable;
     
     use super::*;
+    use crate::sstable::test::*;
 
-    fn generate_kvs() -> Box<dyn Iterator<Item = (String, String)>> {
-        Box::new((0..100).map(|i| (format!("k{}", i), format!("v{}", i))))
-    }
+    // fn generate_kvs() -> Box<dyn Iterator<Item = (String, String)>> {
+    //     Box::new((0..100).map(|i| (format!("k{}", i), format!("v{}", i))))
+    // }
 
-    fn generate_memory() -> Memtable {
-        let mut memory = Memtable::default();
-        let it = generate_kvs();
-        for (k, v) in it {
-            memory.put(k.as_bytes().to_vec(), v.as_bytes().to_vec());
-        }
-        memory
-    }
+    // fn generate_memory() -> Memtable {
+    //     let mut memory = Memtable::default();
+    //     let it = generate_kvs();
+    //     for (k, v) in it {
+    //         memory.put(k.as_bytes().to_vec(), v.as_bytes().to_vec());
+    //     }
+    //     memory
+    // }
 
-    fn generate_disk() -> InternalDiskSSTable {
-        let memory = generate_memory();
-        let file = tempfile::tempfile().unwrap();
-        println!("file: {:?}", file);
-        InternalDiskSSTable::encode_inmemory_sstable(memory, file).unwrap()
+    // fn generate_disk() -> InternalDiskSSTable {
+    //     let memory = generate_memory();
+    //     let file = tempfile::tempfile().unwrap();
+    //     println!("file: {:?}", file);
+    //     InternalDiskSSTable::encode_inmemory_sstable(memory, file).unwrap()
+    // }
+
+    fn generate_default_disk() -> InternalDiskSSTable {
+        generate_disk(generate_memory(generate_kvs()))
     }
 
     fn test_key_fresh(k: &str) -> Option<Vec<u8>> {
-        let mut sstable = generate_disk();
+        let mut sstable = generate_default_disk();
         return sstable.get_value(k.as_bytes()).unwrap();
     }
 
@@ -414,7 +419,7 @@ mod test {
     }
     #[test]
     fn encodes_an_sstable_and_finds_value() {
-        let mut ss_table = generate_disk();
+        let mut ss_table = generate_default_disk();
         for (k, v) in generate_kvs() {
             assert_eq!(
                 ss_table.get_value(k.as_bytes()).unwrap(),
@@ -424,7 +429,7 @@ mod test {
     }
     #[test]
     fn is_able_to_iterate() {
-        let ss_table = generate_disk();
+        let ss_table = generate_default_disk();
         let result = DiskSSTableIterator::new(Arc::new(Mutex::new(ss_table)), KeyValueMapper {})
             .map(|res| res.unwrap())
             .map(|(k, v)| {
@@ -441,7 +446,7 @@ mod test {
     }
     #[test]
     fn is_able_to_iterate_values() {
-        let ss_table = generate_disk();
+        let ss_table = generate_default_disk();
         let result = DiskSSTableKeyValueIterator::new(
             DiskSSTableIterator::new(Arc::new(Mutex::new(ss_table)), KeyValueMapper {}),
         )

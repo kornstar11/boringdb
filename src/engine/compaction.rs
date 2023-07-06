@@ -19,7 +19,7 @@ pub trait CompactorFactory: Send {
 }
 
 
-/// Just merges sstables when there are X amount of them
+/// Just merges sstables when there are X amount of sstables
 ///
 #[derive(Default)]
 struct SimpleCompactorState {
@@ -47,7 +47,7 @@ impl SimpleCompactorState {
                 if let Some(table) = to_merge.get_mut(*idx) {
                     table.read_value_by_value_idx(&vidx).map(|v| v.value_ref)
                 } else {
-                    Err(Error::Other(String::from("unable to locate indexed table.")))
+                    Err(Error::Other(String::from("while compacting, unable to locate indexed table.")))
                 }
             });
         let path = self.config.sstable_path()?;
@@ -63,7 +63,7 @@ struct SimpleCompactorConfig {
 
 impl Default for SimpleCompactorConfig {
     fn default() -> Self {
-        Self { max_ss_tables: 10 }
+        Self { max_ss_tables: 2 }
     }
 }
 
@@ -114,5 +114,13 @@ impl CompactorFactory for SimpleCompactorFactory {
                 Ok(())
             }),
         )
+    }
+}
+
+#[cfg(test)]
+mod test {
+    #[test]
+    fn simple_compactor_can_merge_two_tables() {
+
     }
 }
