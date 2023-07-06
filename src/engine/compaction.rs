@@ -119,8 +119,37 @@ impl CompactorFactory for SimpleCompactorFactory {
 
 #[cfg(test)]
 mod test {
+
+    use super::*;
+    use crate::sstable::test::*;
     #[test]
     fn simple_compactor_can_merge_two_tables() {
+        let ts = time_ms();
+        let mut evens_path = PathBuf::from("/tmp");
+        let mut odds_path = PathBuf::from("/tmp");
+        evens_path.push(format!("evens_{}", ts));
+        odds_path.push(format!("odds_{}", ts));
+        let evens = DiskSSTable::convert_mem(
+            evens_path.clone(),
+            generate_memory(generate_even_kvs()))
+            .unwrap();
+        let odds = DiskSSTable::convert_mem(
+            odds_path.clone(),
+            generate_memory(generate_odd_kvs()))
+            .unwrap();
+        let tracked_sstables = vec![(evens.path(), evens), (odds.path(), odds)].into_iter().collect();
+        let mut compactor_state = SimpleCompactorState{
+            tracked_sstables,
+            ..Default::default()
+        };
+        let (to_delete, new_table) = compactor_state.compact().unwrap();
+        println!("to_delete {:?} {:?}", to_delete, new_table.path());
+
+        for res in new_table.iter_key_values() {
+            let (k, v) = res.unwrap();
+            println!("K: {} {}", String::from_utf8(k).unwrap(), String::from_utf8(v).unwrap());
+
+        }
 
     }
 }

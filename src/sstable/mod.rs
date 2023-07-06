@@ -58,8 +58,18 @@ pub trait MutSSTable {
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
+    use std::time;
+
     use super::{Memtable, disk::InternalDiskSSTable, MutSSTable};
+
+    pub fn time_ms() -> u128 {
+        let time = time::SystemTime::now()
+            .duration_since(time::UNIX_EPOCH)
+            .unwrap()
+            .as_micros();
+        time
+    }
 
     pub fn generate_kvs() -> Box<dyn Iterator<Item = (String, String)>> {
         Box::new((0..10).map(|i| (format!("k{}", i), format!("v{}", i))))

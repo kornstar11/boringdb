@@ -177,8 +177,6 @@ impl Iterator for SortedDiskSSTableKeyValueIterator {
 
 #[cfg(test)]
 mod test {
-    use crate::sstable::{Memtable, MutSSTable};
-
     use super::*;
     use crate::sstable::test::*;
 
