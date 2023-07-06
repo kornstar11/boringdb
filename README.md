@@ -9,3 +9,5 @@ Is an LSM based database. Written for fun. Tried to write the part most interest
 and use other libs for the parts I didn't want to focus on:
 * Redis protocol (https://github.com/hbina/redis-protocol-parser/tree/master)
 
+Docs:
+* https://github.com/google/leveldb/blob/main/doc/impl.md

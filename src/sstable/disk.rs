@@ -3,16 +3,20 @@ use bytes::{Buf, BufMut, BytesMut};
 use parking_lot::Mutex;
 use std::{
     cmp::Ordering,
-    fs::File,
+    fs::{File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::Arc,
 };
 
-use super::{memory::Memtable, SSTable, ValueRef};
+use super::{
+    mappers::{KeyIndexMapper, KeyValueMapper},
+    memory::Memtable,
+    DiskSSTableIterator, DiskSSTableKeyValueIterator, KeyMapper, SSTable, ValueMapper, ValueRef,
+};
 
-#[derive(Debug)]
-struct ValueIndex {
+#[derive(Debug, Copy, Clone)]
+pub struct ValueIndex {
     pos: usize,
     len: usize,
 }
@@ -47,8 +51,8 @@ impl ValuesToPositions {
 }
 
 #[derive(Debug)]
-struct Value {
-    value_ref: ValueRef,
+pub struct Value {
+    pub value_ref: ValueRef,
 }
 
 impl Value {
@@ -65,7 +69,7 @@ impl Value {
         }
     }
 
-    fn decode(mut buf: &[u8]) -> Self {
+    pub fn decode(mut buf: &[u8]) -> Self {
         let is_tombstone = buf.get_u8();
         match is_tombstone {
             0 => Value {
@@ -85,62 +89,6 @@ impl Value {
 }
 
 ///
-/// Iterator over all keys and optionally values in InternalDiskSSTable.
-struct InternalDiskSSTableIterator<'a> {
-    table: &'a mut InternalDiskSSTable,
-    get_values: bool,
-    index: Option<Result<Vec<ValueIndex>>>,
-    pos: usize,
-}
-
-impl<'a> InternalDiskSSTableIterator<'a> {
-    fn new(table: &'a mut InternalDiskSSTable, get_values: bool) -> Self {
-        Self {
-            table,
-            get_values,
-            index: None,
-            pos: 0,
-        }
-    }
-    fn get_next(&mut self) -> Result<Option<(Vec<u8>, Option<Value>)>> {
-        let index = self
-            .index
-            .get_or_insert_with(|| self.table.read_key_index());
-
-        match index {
-            Ok(indexes) => {
-                let index = if let Some(idx) = indexes.get(self.pos) {
-                    idx
-                } else {
-                    return Ok(None);
-                };
-
-                let key_buf = self.table.read_by_value_idx(index)?;
-                let value_opt = if self.get_values {
-                    let value_idx = self.table.read_value_idx()?;
-                    let value_buf = self.table.read_by_value_idx(&value_idx)?;
-                    Some(Value::decode(&value_buf))
-                } else {
-                    None
-                };
-                self.pos += 1;
-                return Ok(Some((key_buf, value_opt)));
-            }
-            Err(e) => Err(Error::Other(e.to_string())),
-        }
-    }
-}
-
-impl<'a> Iterator for InternalDiskSSTableIterator<'a> {
-    type Item = Result<(Vec<u8>, Option<Value>)>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let next = self.get_next().transpose();
-        next
-    }
-}
-
-///
 /// Immutable SSTable stored on Disk. The general file layout is as follows:
 /// ```text
 ///   === Values Section: Value | Value | Value
@@ -154,16 +102,30 @@ impl<'a> Iterator for InternalDiskSSTableIterator<'a> {
 /// As opposed to other impls I have seen, we store the keys and values seperate from each other. The thinking
 /// is that this will help compresion since we are keeping like for like. It may also help with compaction, in the sense
 /// that we can load the keys quicker when comparing sstables.
-struct InternalDiskSSTable {
+pub struct InternalDiskSSTable {
     file: File,
 }
 
 impl InternalDiskSSTable {
-    pub fn iter_values(&mut self) -> InternalDiskSSTableIterator {
-        InternalDiskSSTableIterator::new(self, true)
+    pub fn encode_it(
+        keys: impl Iterator<Item = Vec<u8>>,
+        values: impl Iterator<Item = Result<ValueRef>>,
+        mut file: File,
+    ) -> Result<InternalDiskSSTable> {
+        let mut values_to_position = ValuesToPositions::default();
+        Self::encode_values(values, &mut file, &mut values_to_position)?;
+        Self::encode_keys(keys, &mut file, values_to_position)?;
+        file.sync_all()?;
+
+        Ok(InternalDiskSSTable { file })
     }
-    pub fn iter_keys(&mut self) -> InternalDiskSSTableIterator {
-        InternalDiskSSTableIterator::new(self, false)
+
+    pub fn encode_inmemory_sstable(
+        memory_sstable: Memtable,
+        file: File,
+    ) -> Result<InternalDiskSSTable> {
+        let (keys, values) = memory_sstable.into_key_values();
+        Self::encode_it(keys.into_iter(), values.into_iter().map(Ok), file)
     }
 
     fn read_u64(&mut self) -> Result<u64> {
@@ -187,21 +149,27 @@ impl InternalDiskSSTable {
     }
     ///
     /// Returns the positions of the sorted keys and their length
-    fn read_key_index(&mut self) -> Result<Vec<ValueIndex>> {
+    pub fn read_key_index(&mut self) -> Result<(Vec<ValueIndex>, Vec<ValueIndex>)> {
         let number_of_keys = self.read_number_of_keys()?;
-        let mut result = vec![];
+        let mut key_idxs = vec![];
+        let mut value_idxs = vec![];
         for _ in 0..number_of_keys {
             //let key_pos = self.read_u64()? as usize;
-            let idx = self.read_value_idx()?;
-            result.push(idx);
+            key_idxs.push(self.read_value_idx()?);
+            value_idxs.push(self.read_value_idx()?);
         }
-        Ok(result)
+        Ok((key_idxs, value_idxs))
     }
 
-    fn read_by_value_idx(&mut self, idx: &ValueIndex) -> Result<Vec<u8>> {
+    pub fn read_by_value_idx(&mut self, idx: &ValueIndex) -> Result<Vec<u8>> {
         self.file.seek(SeekFrom::Start(idx.pos as u64))?;
         let key_buf = self.read_bytes(idx.len)?;
         Ok(key_buf)
+    }
+
+    pub fn read_value_by_value_idx(&mut self, idx: &ValueIndex) -> Result<Value> {
+        let value_buf = self.read_by_value_idx(&idx)?;
+        Ok(Value::decode(&value_buf))
     }
 
     fn read_value_idx(&mut self) -> Result<ValueIndex> {
@@ -210,16 +178,16 @@ impl InternalDiskSSTable {
     }
 
     fn search_key_positions(&mut self, k: &[u8]) -> Result<Option<ValueIndex>> {
-        let key_idx_to_position = self.read_key_index()?;
+        let (key_idx_to_position, value_idx_to_position) = self.read_key_index()?;
         let mut l = 0;
         let mut r = key_idx_to_position.len() - 1;
         while r >= l {
             let mid = (l + r) / 2;
-            let idx = &key_idx_to_position[mid];
-            let key_buf = self.read_by_value_idx(idx)?;
+            let key_idx = &key_idx_to_position[mid];
+            let value_idx = value_idx_to_position[mid];
+            let key_buf = self.read_by_value_idx(key_idx)?;
             match k.cmp(&key_buf) {
                 Ordering::Equal => {
-                    let value_idx = self.read_value_idx()?;
                     return Ok(Some(value_idx));
                 }
                 Ordering::Less => {
@@ -244,11 +212,10 @@ impl InternalDiskSSTable {
     fn get_value(&mut self, k: &[u8]) -> Result<Option<Vec<u8>>> {
         let value_idx = self.search_key_positions(k)?;
         match value_idx {
-            Some(value_idx) => {
-                let value_buf = self.read_by_value_idx(&value_idx)?;
+            Some(ref value_idx) => {
                 if let Value {
                     value_ref: ValueRef::MemoryRef(value),
-                } = Value::decode(&value_buf)
+                } = self.read_value_by_value_idx(value_idx)?
                 {
                     return Ok(Some(value));
                 }
@@ -258,32 +225,19 @@ impl InternalDiskSSTable {
         Ok(None)
     }
 
-    pub fn encode_inmemory_sstable(
-        memory_sstable: Memtable,
-        mut file: File,
-    ) -> Result<InternalDiskSSTable> {
-        let mut values_to_position = ValuesToPositions::default();
-        let (keys, values) = memory_sstable.into_key_values();
-        Self::encode_values(values, &mut file, &mut values_to_position)?;
-        Self::encode_keys(keys, &mut file, values_to_position)?;
-
-        Ok(InternalDiskSSTable { file })
-    }
-
     fn encode_keys(
-        keys: Vec<Vec<u8>>,
+        keys: impl Iterator<Item = Vec<u8>>,
         file: &mut File,
         values_to_position: ValuesToPositions,
     ) -> Result<()> {
-        let (key_idxs, mut position) = values_to_position.split();
+        let (value_idxs, mut position) = values_to_position.split();
         // tracks the key index to position in the file
-        let mut key_idx_to_pos = vec![];
+        let mut key_idxs = vec![];
         // write the key values to the file as well as the corresponding value index in the file.
-        for (key, value_idx) in keys.into_iter().zip(key_idxs) {
-            key_idx_to_pos.push(ValueIndex::new(position, key.len()));
+        for key in keys {
+            key_idxs.push(ValueIndex::new(position, key.len()));
             let mut buf = BytesMut::new();
             buf.put_slice(key.as_slice());
-            value_idx.encode(&mut buf);
             let len = buf.len();
             file.write_all(&buf)?;
             position += len;
@@ -292,9 +246,10 @@ impl InternalDiskSSTable {
         let mut buf = BytesMut::new(); //just use one buffer for these since they should be small
         let keys_start_pos = position;
         // encode number of keys
-        buf.put_u64_le(key_idx_to_pos.len() as u64);
-        for key_idx in key_idx_to_pos {
+        buf.put_u64_le(key_idxs.len() as u64);
+        for (key_idx, value_idx) in key_idxs.into_iter().zip(value_idxs.into_iter()) {
             key_idx.encode(&mut buf);
+            value_idx.encode(&mut buf);
         }
         // write keys start position
         buf.put_u64_le(keys_start_pos as u64);
@@ -304,11 +259,12 @@ impl InternalDiskSSTable {
     }
 
     fn encode_values(
-        values: Vec<ValueRef>,
+        values: impl Iterator<Item = Result<ValueRef>>,
         file: &mut File,
         values_to_position: &mut ValuesToPositions,
     ) -> Result<()> {
-        for value_ref in values.into_iter() {
+        for value_ref_res in values {
+            let value_ref = value_ref_res?;
             let mut buf = BytesMut::new();
             let value = Value { value_ref };
             value.encode(&mut buf);
@@ -325,6 +281,7 @@ impl InternalDiskSSTable {
 
 ///
 /// Outward facing interface of the sstable, allows for cloning, and is a central point to control the mutex.
+#[derive(Clone)]
 pub struct DiskSSTable {
     path: PathBuf,
     inner: Arc<Mutex<InternalDiskSSTable>>,
@@ -332,13 +289,29 @@ pub struct DiskSSTable {
 
 impl DiskSSTable {
     pub fn convert_mem<P: AsRef<Path>>(path: P, memory_sstable: Memtable) -> Result<DiskSSTable> {
-        let file = File::create(path.as_ref())?;
-        let inner = InternalDiskSSTable::encode_inmemory_sstable(memory_sstable, file)?;
+        let (keys, values) = memory_sstable.into_key_values();
+        Self::convert_from_iter(path, keys.into_iter(), values.into_iter().map(Ok))
+    }
+
+    pub fn convert_from_iter<P: AsRef<Path>>(
+        path: P,
+        keys: impl Iterator<Item = Vec<u8>>,
+        values: impl Iterator<Item = Result<ValueRef>>,
+    ) -> Result<DiskSSTable> {
+        let file = {
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(path.as_ref())?
+        };
+        let inner = InternalDiskSSTable::encode_it(keys, values, file)?;
         Ok(DiskSSTable {
             path: path.as_ref().to_path_buf(),
             inner: Arc::new(Mutex::new(inner)),
         })
     }
+
     pub fn open<P: AsRef<Path>>(path: P) -> Result<DiskSSTable> {
         let path = path.as_ref().to_path_buf();
         let file = File::open(path.clone())?;
@@ -349,8 +322,46 @@ impl DiskSSTable {
         })
     }
 
+    pub fn drop_and_remove_file(self) -> Result<()> {
+        // this is tricky, it would be nice to enforce the lock being dead
+        if let Ok(inner) = Arc::try_unwrap(self.inner) {
+            let inner = inner.into_inner();
+            std::mem::drop(inner);
+            std::fs::remove_file(self.path)?;
+            Ok(())
+        } else {
+            Err(Error::Other(String::from(
+                "Reference to this SSTable is still held.",
+            )))
+        }
+    }
+
     pub fn path(&self) -> PathBuf {
         self.path.clone()
+    }
+
+    pub fn read_value_by_value_idx(&self, idx: &ValueIndex) -> Result<Value> {
+        self.inner.lock().read_value_by_value_idx(idx)
+    }
+
+    pub fn iter_key_values(&self) -> DiskSSTableKeyValueIterator {
+        DiskSSTableKeyValueIterator::new(DiskSSTableIterator::new(
+            Arc::clone(&self.inner),
+            KeyValueMapper {},
+        ))
+    }
+
+    pub fn iter_key_idxs(
+        &self,
+    ) -> DiskSSTableIterator<(Vec<u8>, (ValueIndex, ValueIndex)), KeyIndexMapper> {
+        DiskSSTableIterator::new(Arc::clone(&self.inner), KeyIndexMapper {})
+    }
+
+    pub fn iter_key(&self) -> DiskSSTableIterator<Vec<u8>, KeyMapper> {
+        DiskSSTableIterator::new(Arc::clone(&self.inner), KeyMapper {})
+    }
+    pub fn iter_value(&self) -> DiskSSTableIterator<Value, ValueMapper> {
+        DiskSSTableIterator::new(Arc::clone(&self.inner), ValueMapper {})
     }
 }
 
@@ -369,29 +380,34 @@ mod test {
     use crate::sstable::MutSSTable;
 
     use super::*;
+    use crate::sstable::test::*;
 
-    fn generate_kvs() -> Box<dyn Iterator<Item = (String, String)>> {
-        Box::new((0..100).map(|i| (format!("k{}", i), format!("v{}", i))))
-    }
+    // fn generate_kvs() -> Box<dyn Iterator<Item = (String, String)>> {
+    //     Box::new((0..100).map(|i| (format!("k{}", i), format!("v{}", i))))
+    // }
 
-    fn generate_memory() -> Memtable {
-        let mut memory = Memtable::default();
-        let it = generate_kvs();
-        for (k, v) in it {
-            memory.put(k.as_bytes().to_vec(), v.as_bytes().to_vec());
-        }
-        memory
-    }
+    // fn generate_memory() -> Memtable {
+    //     let mut memory = Memtable::default();
+    //     let it = generate_kvs();
+    //     for (k, v) in it {
+    //         memory.put(k.as_bytes().to_vec(), v.as_bytes().to_vec());
+    //     }
+    //     memory
+    // }
 
-    fn generate_disk() -> InternalDiskSSTable {
-        let memory = generate_memory();
-        let file = tempfile::tempfile().unwrap();
-        println!("file: {:?}", file);
-        InternalDiskSSTable::encode_inmemory_sstable(memory, file).unwrap()
+    // fn generate_disk() -> InternalDiskSSTable {
+    //     let memory = generate_memory();
+    //     let file = tempfile::tempfile().unwrap();
+    //     println!("file: {:?}", file);
+    //     InternalDiskSSTable::encode_inmemory_sstable(memory, file).unwrap()
+    // }
+
+    fn generate_default_disk() -> InternalDiskSSTable {
+        generate_disk(generate_memory(generate_kvs()))
     }
 
     fn test_key_fresh(k: &str) -> Option<Vec<u8>> {
-        let mut sstable = generate_disk();
+        let mut sstable = generate_default_disk();
         return sstable.get_value(k.as_bytes()).unwrap();
     }
 
@@ -410,7 +426,7 @@ mod test {
     }
     #[test]
     fn encodes_an_sstable_and_finds_value() {
-        let mut ss_table = generate_disk();
+        let mut ss_table = generate_default_disk();
         for (k, v) in generate_kvs() {
             assert_eq!(
                 ss_table.get_value(k.as_bytes()).unwrap(),
@@ -420,17 +436,36 @@ mod test {
     }
     #[test]
     fn is_able_to_iterate() {
-        let mut ss_table = generate_disk();
-        let result = ss_table
-            .iter_values()
+        let ss_table = generate_default_disk();
+        let result = DiskSSTableIterator::new(Arc::new(Mutex::new(ss_table)), KeyValueMapper {})
             .map(|res| res.unwrap())
             .map(|(k, v)| {
                 (
                     String::from_utf8_lossy(&k).to_string(),
-                    v.unwrap().value_ref.to_string(),
+                    v.value_ref.to_string(),
                 )
             })
             .collect::<Vec<_>>();
+        let mut control = generate_kvs().collect::<Vec<_>>();
+        control.sort();
+
+        assert_eq!(control, result);
+    }
+    #[test]
+    fn is_able_to_iterate_values() {
+        let ss_table = generate_default_disk();
+        let result = DiskSSTableKeyValueIterator::new(DiskSSTableIterator::new(
+            Arc::new(Mutex::new(ss_table)),
+            KeyValueMapper {},
+        ))
+        .map(|res| res.unwrap())
+        .map(|(k, v)| {
+            (
+                String::from_utf8_lossy(&k).to_string(),
+                String::from_utf8_lossy(&v).to_string(),
+            )
+        })
+        .collect::<Vec<_>>();
         let mut control = generate_kvs().collect::<Vec<_>>();
         control.sort();
 

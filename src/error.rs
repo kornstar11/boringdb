@@ -1,4 +1,4 @@
-use std::time;
+use std::{sync::mpsc::SendError, time};
 
 use thiserror::Error;
 
@@ -10,6 +10,8 @@ pub enum Error {
     IO(#[from] std::io::Error),
     #[error("Time Error {0}")]
     TimeError(time::SystemTimeError),
+    #[error("Channel died")]
+    SendError,
     #[error("Other {0}")]
     Other(String),
 }
