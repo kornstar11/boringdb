@@ -143,13 +143,15 @@ mod test {
             ..Default::default()
         };
         let (to_delete, new_table) = compactor_state.compact().unwrap();
-        println!("to_delete {:?} {:?}", to_delete, new_table.path());
-
-        for res in new_table.iter_key_values() {
-            let (k, v) = res.unwrap();
-            println!("K: {} {}", String::from_utf8(k).unwrap(), String::from_utf8(v).unwrap());
-
-        }
-
+        assert_eq!(to_delete.len(), 2); 
+        // check new sstable contains the contents of evens and odds
+        let new_contents = new_table
+            .iter_key_values()
+            .collect::<Result<Vec<_>>>()
+            .unwrap()
+            .into_iter().map(|(k, v)| {
+                (String::from_utf8(k).unwrap(), String::from_utf8(v).unwrap())
+            }).collect::<Vec<_>>();
+        assert_eq!(new_contents, vec![("k0", "v0"), ("k1", "v1"), ("k2", "v2"), ("k3", "v3"), ("k4", "v4"), ("k5", "v5"), ("k6", "v6"), ("k7", "v7"), ("k8", "v8"), ("k9", "v9")].into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<Vec<_>>() );
     }
 }
