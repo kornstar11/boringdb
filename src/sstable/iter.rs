@@ -1,10 +1,13 @@
-use std::{sync::Arc, marker::PhantomData, iter::Peekable, cmp::Ordering};
+use std::{cmp::Ordering, iter::Peekable, marker::PhantomData, sync::Arc};
 
 use parking_lot::Mutex;
 
-use super::{mappers::{Mapper, KeyValueMapper, KeyIndexMapper}, Value, ValueRef, disk::{InternalDiskSSTable, ValueIndex}};
+use super::{
+    disk::{InternalDiskSSTable, ValueIndex},
+    mappers::{KeyIndexMapper, KeyValueMapper, Mapper},
+    Value, ValueRef,
+};
 use crate::error::*;
-
 
 pub struct DiskSSTableKeyValueIterator {
     inner: DiskSSTableIterator<(Vec<u8>, Value), KeyValueMapper>,
@@ -12,7 +15,7 @@ pub struct DiskSSTableKeyValueIterator {
 
 impl DiskSSTableKeyValueIterator {
     pub fn new(inner: DiskSSTableIterator<(Vec<u8>, Value), KeyValueMapper>) -> Self {
-        Self {inner}
+        Self { inner }
     }
     fn get_next(&mut self) -> Option<Result<Option<(Vec<u8>, Vec<u8>)>>> {
         match self.inner.next() {
@@ -53,7 +56,6 @@ impl Iterator for DiskSSTableKeyValueIterator {
     }
 }
 
-
 ///
 /// Iterator over all keys and optionally values in InternalDiskSSTable.
 pub struct DiskSSTableIterator<O, M> {
@@ -92,9 +94,7 @@ impl<O: Send, M: Mapper<O>> DiskSSTableIterator<O, M> {
                     return Ok(None);
                 };
 
-                let mapped = self
-                    .mapper
-                    .map(&mut table, (key_idx, value_idx))?;
+                let mapped = self.mapper.map(&mut table, (key_idx, value_idx))?;
 
                 self.pos += 1;
                 return Ok(Some(mapped));
@@ -150,30 +150,27 @@ impl Iterator for SortedDiskSSTableKeyValueIterator {
 
             let current_prefered_key = preferable_key.map(|(_, k)| k);
 
-            if peeked_key.is_some() && (peeked_key.cmp(&current_prefered_key) == self.order || preferable_key.is_none())  {
-                preferable_key = peeked_key.map(|k| {
-                    (idx, k)
-                })
-
+            if peeked_key.is_some()
+                && (peeked_key.cmp(&current_prefered_key) == self.order || preferable_key.is_none())
+            {
+                preferable_key = peeked_key.map(|k| (idx, k))
             }
         }
         if let Some((idx, _)) = preferable_key {
             if let Some(ref mut it) = self.iters.get_mut(idx) {
                 let result = it.next();
-                return result.map(|res| 
+                return result.map(|res| {
                     res.map(|t| {
                         let (k, (ki, vi)) = t;
                         (k, idx, ki, vi)
                     })
-                );
+                });
             }
         }
 
         None
     }
 }
-
-
 
 #[cfg(test)]
 mod test {
@@ -183,7 +180,7 @@ mod test {
     #[test]
     fn match_with_one_it() {
         let it = generate_disk(generate_memory(generate_kvs()));
-        let it = DiskSSTableIterator::new(Arc::new(Mutex::new(it)), KeyIndexMapper{});
+        let it = DiskSSTableIterator::new(Arc::new(Mutex::new(it)), KeyIndexMapper {});
         let sorted = SortedDiskSSTableKeyValueIterator::new(vec![it]);
         let sorted: Result<Vec<_>> = sorted.collect();
         let sorted = sorted
@@ -192,16 +189,18 @@ mod test {
             .map(|x| String::from_utf8(x.0).unwrap())
             .collect::<Vec<_>>();
         println!("{:?}", sorted);
-        assert_eq!(sorted, vec!["k0", "k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8", "k9"])
-
+        assert_eq!(
+            sorted,
+            vec!["k0", "k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8", "k9"]
+        )
     }
 
     #[test]
     fn sorted_disk_iter_can_sort_multiple() {
         let even = generate_disk(generate_memory(generate_even_kvs()));
-        let even = DiskSSTableIterator::new(Arc::new(Mutex::new(even)), KeyIndexMapper{});
+        let even = DiskSSTableIterator::new(Arc::new(Mutex::new(even)), KeyIndexMapper {});
         let odd = generate_disk(generate_memory(generate_odd_kvs()));
-        let odd = DiskSSTableIterator::new(Arc::new(Mutex::new(odd)), KeyIndexMapper{});
+        let odd = DiskSSTableIterator::new(Arc::new(Mutex::new(odd)), KeyIndexMapper {});
 
         let sorted = SortedDiskSSTableKeyValueIterator::new(vec![odd, even]);
 
@@ -213,9 +212,9 @@ mod test {
             .collect::<Vec<_>>();
         println!("{:?}", sorted);
 
-        assert_eq!(sorted, vec!["k0", "k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8", "k9"])
-
-
-
+        assert_eq!(
+            sorted,
+            vec!["k0", "k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8", "k9"]
+        )
     }
 }

@@ -9,7 +9,11 @@ use std::{
     sync::Arc,
 };
 
-use super::{memory::Memtable, SSTable, ValueRef, mappers::{KeyValueMapper, KeyIndexMapper}, KeyMapper, ValueMapper, DiskSSTableIterator, DiskSSTableKeyValueIterator};
+use super::{
+    mappers::{KeyIndexMapper, KeyValueMapper},
+    memory::Memtable,
+    DiskSSTableIterator, DiskSSTableKeyValueIterator, KeyMapper, SSTable, ValueMapper, ValueRef,
+};
 
 #[derive(Debug, Copy, Clone)]
 pub struct ValueIndex {
@@ -290,9 +294,10 @@ impl DiskSSTable {
     }
 
     pub fn convert_from_iter<P: AsRef<Path>>(
-        path: P, 
+        path: P,
         keys: impl Iterator<Item = Vec<u8>>,
-        values: impl Iterator<Item = Result<ValueRef>>,) -> Result<DiskSSTable> {
+        values: impl Iterator<Item = Result<ValueRef>>,
+    ) -> Result<DiskSSTable> {
         let file = {
             OpenOptions::new()
                 .read(true)
@@ -340,12 +345,15 @@ impl DiskSSTable {
     }
 
     pub fn iter_key_values(&self) -> DiskSSTableKeyValueIterator {
-        DiskSSTableKeyValueIterator::new (
-            DiskSSTableIterator::new(Arc::clone(&self.inner), KeyValueMapper {}),
-        )
+        DiskSSTableKeyValueIterator::new(DiskSSTableIterator::new(
+            Arc::clone(&self.inner),
+            KeyValueMapper {},
+        ))
     }
 
-    pub fn iter_key_idxs(&self) -> DiskSSTableIterator<(Vec<u8>, (ValueIndex, ValueIndex)), KeyIndexMapper> {
+    pub fn iter_key_idxs(
+        &self,
+    ) -> DiskSSTableIterator<(Vec<u8>, (ValueIndex, ValueIndex)), KeyIndexMapper> {
         DiskSSTableIterator::new(Arc::clone(&self.inner), KeyIndexMapper {})
     }
 
@@ -355,7 +363,6 @@ impl DiskSSTable {
     pub fn iter_value(&self) -> DiskSSTableIterator<Value, ValueMapper> {
         DiskSSTableIterator::new(Arc::clone(&self.inner), ValueMapper {})
     }
-
 }
 
 impl SSTable<Vec<u8>> for DiskSSTable {
@@ -371,7 +378,7 @@ impl SSTable<Vec<u8>> for DiskSSTable {
 #[cfg(test)]
 mod test {
     use crate::sstable::MutSSTable;
-    
+
     use super::*;
     use crate::sstable::test::*;
 
@@ -447,9 +454,10 @@ mod test {
     #[test]
     fn is_able_to_iterate_values() {
         let ss_table = generate_default_disk();
-        let result = DiskSSTableKeyValueIterator::new(
-            DiskSSTableIterator::new(Arc::new(Mutex::new(ss_table)), KeyValueMapper {}),
-        )
+        let result = DiskSSTableKeyValueIterator::new(DiskSSTableIterator::new(
+            Arc::new(Mutex::new(ss_table)),
+            KeyValueMapper {},
+        ))
         .map(|res| res.unwrap())
         .map(|(k, v)| {
             (

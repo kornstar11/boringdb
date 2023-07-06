@@ -1,5 +1,5 @@
-use super::Value;
 use super::disk::{InternalDiskSSTable, ValueIndex};
+use super::Value;
 use crate::error::*;
 
 pub trait Mapper<O> {
@@ -38,7 +38,6 @@ impl Mapper<(Vec<u8>, (ValueIndex, ValueIndex))> for KeyIndexMapper {
         Ok((key_buf, (key_idx.to_owned(), value_idx.to_owned())))
     }
 }
-
 
 ///
 /// KeyMapper

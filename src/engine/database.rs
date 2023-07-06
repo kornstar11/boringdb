@@ -40,7 +40,6 @@ impl DatabaseConfig {
 
         Ok(path)
     }
-    
 }
 
 impl Clone for DatabaseConfig {
@@ -126,7 +125,6 @@ impl Database {
     /// Flush memtable to disk and add the new disktable to our stack of disktables.
     ///
     fn flush_to_disk(&mut self) -> Result<()> {
-        
         // make path
         let mut path = self.config.sstable_path()?;
 
@@ -195,9 +193,7 @@ impl Database {
 
 #[cfg(test)]
 mod test {
-    use std::sync::{
-        Arc,
-    };
+    use std::sync::Arc;
 
     use super::*;
 

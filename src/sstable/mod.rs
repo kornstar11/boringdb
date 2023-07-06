@@ -1,15 +1,17 @@
 mod disk;
-mod memory;
-mod mappers;
 mod iter;
+mod mappers;
+mod memory;
 
 use std::fmt::Display;
 
 use crate::error::*;
-pub use mappers::{KeyMapper, ValueMapper};
 pub use crate::sstable::disk::{DiskSSTable, Value};
-pub use crate::sstable::iter::{DiskSSTableKeyValueIterator, DiskSSTableIterator, SortedDiskSSTableKeyValueIterator};
+pub use crate::sstable::iter::{
+    DiskSSTableIterator, DiskSSTableKeyValueIterator, SortedDiskSSTableKeyValueIterator,
+};
 pub use crate::sstable::memory::Memtable;
+pub use mappers::{KeyMapper, ValueMapper};
 #[derive(Debug)]
 pub enum ValueRef {
     MemoryRef(Vec<u8>),
@@ -61,7 +63,7 @@ pub trait MutSSTable {
 pub mod test {
     use std::time;
 
-    use super::{Memtable, disk::InternalDiskSSTable, MutSSTable};
+    use super::{disk::InternalDiskSSTable, Memtable, MutSSTable};
 
     pub fn time_ms() -> u128 {
         let time = time::SystemTime::now()
@@ -76,10 +78,18 @@ pub mod test {
     }
 
     pub fn generate_even_kvs() -> Box<dyn Iterator<Item = (String, String)>> {
-        Box::new((0..10).filter(|x| x % 2 == 0).map(|i| (format!("k{}", i), format!("v{}", i))))
+        Box::new(
+            (0..10)
+                .filter(|x| x % 2 == 0)
+                .map(|i| (format!("k{}", i), format!("v{}", i))),
+        )
     }
     pub fn generate_odd_kvs() -> Box<dyn Iterator<Item = (String, String)>> {
-        Box::new((0..10).filter(|x| x % 2 == 1).map(|i| (format!("k{}", i), format!("v{}", i))))
+        Box::new(
+            (0..10)
+                .filter(|x| x % 2 == 1)
+                .map(|i| (format!("k{}", i), format!("v{}", i))),
+        )
     }
 
     pub fn generate_memory(it: Box<dyn Iterator<Item = (String, String)>>) -> Memtable {

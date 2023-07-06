@@ -1,4 +1,4 @@
-use super::{CompactorCommand, database::DatabaseConfig};
+use super::{database::DatabaseConfig, CompactorCommand};
 use crate::{
     error::*,
     sstable::{DiskSSTable, SortedDiskSSTableKeyValueIterator},
@@ -18,7 +18,6 @@ pub trait CompactorFactory: Send {
     fn clone(&self) -> Box<dyn CompactorFactory>;
 }
 
-
 /// Just merges sstables when there are X amount of sstables
 ///
 #[derive(Default)]
@@ -34,25 +33,28 @@ impl SimpleCompactorState {
         let mut to_merge = std::mem::take(&mut self.tracked_sstables)
             .into_values()
             .collect::<Vec<_>>();
-        let iters = to_merge.iter()
+        let iters = to_merge
+            .iter()
             .map(|table| table.iter_key_idxs())
             .collect::<Vec<_>>();
-        let sorted_iter = SortedDiskSSTableKeyValueIterator::new(iters).collect::<Result<Vec<_>>>()?;
-        let key_it = sorted_iter
-            .iter()
-            .map(|(k, _, _, _)| {k.to_vec()});
-        let value_it = sorted_iter
-            .iter()
-            .map(|(_, idx, _, vidx)| {
-                if let Some(table) = to_merge.get_mut(*idx) {
-                    table.read_value_by_value_idx(&vidx).map(|v| v.value_ref)
-                } else {
-                    Err(Error::Other(String::from("while compacting, unable to locate indexed table.")))
-                }
-            });
+        let sorted_iter =
+            SortedDiskSSTableKeyValueIterator::new(iters).collect::<Result<Vec<_>>>()?;
+        let key_it = sorted_iter.iter().map(|(k, _, _, _)| k.to_vec());
+        let value_it = sorted_iter.iter().map(|(_, idx, _, vidx)| {
+            if let Some(table) = to_merge.get_mut(*idx) {
+                table.read_value_by_value_idx(&vidx).map(|v| v.value_ref)
+            } else {
+                Err(Error::Other(String::from(
+                    "while compacting, unable to locate indexed table.",
+                )))
+            }
+        });
         let path = self.config.sstable_path()?;
         let new_ss_table = DiskSSTable::convert_from_iter(path, key_it, value_it)?;
-        Ok((to_merge.into_iter().map(|table| table.path()).collect(), new_ss_table))
+        Ok((
+            to_merge.into_iter().map(|table| table.path()).collect(),
+            new_ss_table,
+        ))
     }
 }
 
@@ -129,29 +131,45 @@ mod test {
         let mut odds_path = PathBuf::from("/tmp");
         evens_path.push(format!("evens_{}", ts));
         odds_path.push(format!("odds_{}", ts));
-        let evens = DiskSSTable::convert_mem(
-            evens_path.clone(),
-            generate_memory(generate_even_kvs()))
+        let evens =
+            DiskSSTable::convert_mem(evens_path.clone(), generate_memory(generate_even_kvs()))
+                .unwrap();
+        let odds = DiskSSTable::convert_mem(odds_path.clone(), generate_memory(generate_odd_kvs()))
             .unwrap();
-        let odds = DiskSSTable::convert_mem(
-            odds_path.clone(),
-            generate_memory(generate_odd_kvs()))
-            .unwrap();
-        let tracked_sstables = vec![(evens.path(), evens), (odds.path(), odds)].into_iter().collect();
-        let mut compactor_state = SimpleCompactorState{
+        let tracked_sstables = vec![(evens.path(), evens), (odds.path(), odds)]
+            .into_iter()
+            .collect();
+        let mut compactor_state = SimpleCompactorState {
             tracked_sstables,
             ..Default::default()
         };
         let (to_delete, new_table) = compactor_state.compact().unwrap();
-        assert_eq!(to_delete.len(), 2); 
+        assert_eq!(to_delete.len(), 2);
         // check new sstable contains the contents of evens and odds
         let new_contents = new_table
             .iter_key_values()
             .collect::<Result<Vec<_>>>()
             .unwrap()
-            .into_iter().map(|(k, v)| {
-                (String::from_utf8(k).unwrap(), String::from_utf8(v).unwrap())
-            }).collect::<Vec<_>>();
-        assert_eq!(new_contents, vec![("k0", "v0"), ("k1", "v1"), ("k2", "v2"), ("k3", "v3"), ("k4", "v4"), ("k5", "v5"), ("k6", "v6"), ("k7", "v7"), ("k8", "v8"), ("k9", "v9")].into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<Vec<_>>() );
+            .into_iter()
+            .map(|(k, v)| (String::from_utf8(k).unwrap(), String::from_utf8(v).unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            new_contents,
+            vec![
+                ("k0", "v0"),
+                ("k1", "v1"),
+                ("k2", "v2"),
+                ("k3", "v3"),
+                ("k4", "v4"),
+                ("k5", "v5"),
+                ("k6", "v6"),
+                ("k7", "v7"),
+                ("k8", "v8"),
+                ("k9", "v9")
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect::<Vec<_>>()
+        );
     }
 }
