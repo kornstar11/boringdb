@@ -1,4 +1,5 @@
-use boringdb::*;
+
 fn main() {
-    println!("Hello, world!");
+    env_logger::init();
+    log::info!("Test")
 }
