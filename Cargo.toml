@@ -9,7 +9,7 @@ edition = "2021"
 bytes = "1.4.0"
 thiserror = "1.0.24"
 parking_lot = "0.12.1"
-redis-protocol = "4.1.0"
+redis-protocol = { version = "4.1.0", features = ["decode-mut"] }
 log = "0.4.19"
 env_logger = "0.10.0"
 
