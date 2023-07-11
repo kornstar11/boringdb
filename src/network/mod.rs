@@ -1,13 +1,14 @@
-use parking_lot::Mutex;
 use redis_protocol::resp2::prelude::*;
 use bytes::{Bytes, BytesMut};
 use redis_protocol::resp3::encode::complete::encode;
-use std::default;
-use std::io::prelude::*;
-use std::net::{TcpStream, SocketAddr, TcpListener};
+use tokio::io::AsyncReadExt;
+use tokio::net::{TcpListener, TcpStream};
+use tokio::spawn;
+use tokio::task::JoinHandle;
+use tokio::sync::mpsc::{channel, Sender};
+use tokio::sync::{oneshot, Mutex};
+use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::mpsc::{sync_channel, SyncSender, Receiver};
-use std::thread::{spawn, JoinHandle};
 use crate::{Database, DatabaseContext};
 use crate::error::*;
 
@@ -40,16 +41,16 @@ use crate::error::*;
 
 struct FrameWithCallback {
     frame: Frame,
-    cb: SyncSender<Frame>
+    cb: oneshot::Sender<Frame>
 }
 
 impl FrameWithCallback {
-    fn split(self) -> (Frame, SyncSender<Frame>) {
+    fn split(self) -> (Frame, oneshot::Sender<Frame>) {
         (self.frame, self.cb)
     }
 
-    fn new(frame: Frame) -> (Self, Receiver<Frame>) {
-        let (cb, rx) = sync_channel(1);
+    fn new(frame: Frame) -> (Self, oneshot::Receiver<Frame>) {
+        let (cb, rx) = oneshot::channel();
         (Self{frame, cb}, rx)
     }
 }
@@ -77,12 +78,12 @@ struct ServerFactory {
 
 impl ServerFactory {
     pub fn start(&self) -> JoinHandle<()> {
-        let (tx, rx) = sync_channel::<FrameWithCallback>(self.outstanding_requests);
+        let (tx, mut rx) = channel::<FrameWithCallback>(self.outstanding_requests);
 
 
-        let forwarder = spawn(move || {
+        let forwarder = spawn(async move {
             let mut state = ServerState::new();
-            while let Ok(cmd) = rx.recv() {
+            while let Some(cmd) = rx.recv().await {
                 let (frame, cb) = cmd.split();
 
                     // DatabaseCommands::Get { key, cb } => {
@@ -101,11 +102,11 @@ impl ServerFactory {
             log::info!("Stopping network thread (db)");
         });
         let network_self = self.clone();
-        let network_thread = spawn(move || {
-            match TcpListener::bind(network_self.addr) {
+        let network_thread = spawn(async move {
+            match TcpListener::bind(network_self.addr).await {
                 Ok(tcp) => {
-                    while let Ok((stream, _remote)) = tcp.accept() {
-                        if let Err(e) = Self::handler(stream, tx.clone()) {
+                    while let Ok((stream, _remote)) = tcp.accept().await {
+                        if let Err(e) = Self::handler(stream, tx.clone()).await {
                             log::warn!("Client error: {:?}", e);
                         }
                     }
@@ -120,10 +121,10 @@ impl ServerFactory {
         todo!()
     }
 
-    fn handler(mut stream: TcpStream, tx_commands: SyncSender<FrameWithCallback>) -> Result<()> {
+    async fn handler(mut stream: TcpStream, tx_commands: Sender<FrameWithCallback>) -> Result<()> {
         let mut outer_buf = BytesMut::new();
         let mut buf = BytesMut::with_capacity(1024);//[0 as u8; 1024];
-        while let Ok(bytes_read) = stream.read(&mut buf) {
+        while let Ok(bytes_read) = stream.read(&mut buf).await {
             if bytes_read == 0 {
                 log::info!("Closed connection.");
                 return Ok(());
@@ -131,13 +132,14 @@ impl ServerFactory {
             //let bytes = buf.clone().freeze();
             match decode_mut(&mut buf) {
                 Ok(Some((frame, _read, _consumed))) => {
-                    let (frame_with_cb, cb) = FrameWithCallback::new(frame);
-                    if let Err(_) = tx_commands.send(frame_with_cb) {
+                    let (frame_with_cb, mut cb) = FrameWithCallback::new(frame);
+                    if let Err(_) = tx_commands.send(frame_with_cb).await {
                         log::info!("Recv loop closed.");
                         return Ok(());
                     }
-                    if let Ok(resp) = cb.recv() {
-                        let encode = encode(buf, offset, frame)
+                    if let Ok(resp) = cb.try_recv() {
+                        //todo
+                        //let encode = encode(buf, offset, frame)
 
                     }
                     

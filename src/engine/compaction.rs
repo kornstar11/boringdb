@@ -1,3 +1,5 @@
+use tokio::{task::JoinHandle, sync::mpsc::{channel, Receiver}, spawn};
+
 use super::{CompactorCommand, SSTableNamer};
 use crate::{
     error::*,
@@ -5,9 +7,7 @@ use crate::{
 };
 use std::{
     collections::HashMap,
-    path::PathBuf,
-    sync::mpsc::{sync_channel, Receiver},
-    thread::{spawn, JoinHandle},
+    path::PathBuf
 };
 
 pub trait CompactorFactory: Send {
@@ -83,9 +83,9 @@ impl CompactorFactory for SimpleCompactorFactory {
     }
     fn start(
         &self,
-        compactor_evt_rx: Receiver<CompactorCommand>,
+        mut compactor_evt_rx: Receiver<CompactorCommand>,
     ) -> (Receiver<CompactorCommand>, JoinHandle<Result<()>>) {
-        let (tx, rx) = sync_channel(1);
+        let (tx, rx) = channel(1);
         let mut state = SimpleCompactorState{
             config: self.config.clone(),
             ..Default::default()
@@ -93,18 +93,17 @@ impl CompactorFactory for SimpleCompactorFactory {
         let config = self.config.clone();
         (
             rx,
-            spawn(move || {
-                while let Ok(evt) = compactor_evt_rx.recv() {
+            spawn(async move {
+                while let Some(evt) = compactor_evt_rx.recv().await {
                     match evt {
                         CompactorCommand::NewSSTable(table) => {
                             state.tracked_sstables.insert(table.path(), table);
                             if state.tracked_sstables.len() >= config.max_ss_tables {
                                 let (to_delete, new_table) = state.compact().unwrap();
-                                if let Err(_) = tx.send(CompactorCommand::NewSSTable(new_table)) {
-                                    // log::info!("Closing")
+                                if let Err(_) = tx.send(CompactorCommand::NewSSTable(new_table)).await {
                                     break;
                                 }
-                                if let Err(_) = tx.send(CompactorCommand::RemoveSSTables(to_delete))
+                                if let Err(_) = tx.send(CompactorCommand::RemoveSSTables(to_delete)).await
                                 {
                                     break;
                                 }
@@ -117,6 +116,7 @@ impl CompactorFactory for SimpleCompactorFactory {
                         }
                     }
                 }
+                log::info!("Closing compactor loop");
                 Ok(())
             }),
         )

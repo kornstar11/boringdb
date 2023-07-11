@@ -1,10 +1,11 @@
-use parking_lot::Mutex;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::Arc;
-use std::thread::spawn;
 use std::{collections::BTreeMap, path::PathBuf};
+
+use tokio::spawn;
+use tokio::sync::Mutex;
+use tokio::sync::mpsc::{Sender, channel};
 
 use crate::{error::*, sstable::*};
 
@@ -55,21 +56,21 @@ pub struct Database {
     config: DatabaseContext,
     memtable: Memtable,
     disk_sstables: BTreeMap<PathBuf, DiskSSTable>,
-    compactor_evt_tx: SyncSender<CompactorCommand>,
+    compactor_evt_tx: Sender<CompactorCommand>,
 }
 
 impl Database {
     pub fn start(config: DatabaseContext) -> Arc<Mutex<Self>> {
-        let (compactor_evt_tx, compactor_evt_rx) = sync_channel(1);
+        let (compactor_evt_tx, compactor_evt_rx) = channel(1);
         let db = Self::new(config.clone(), compactor_evt_tx);
         let db = Arc::new(Mutex::new(db));
         let event_db = Arc::clone(&db);
 
-        let (compactor_evt_rx, _join) = config.compactor_factory.start(compactor_evt_rx);
+        let (mut compactor_evt_rx, _join) = config.compactor_factory.start(compactor_evt_rx);
 
-        let _evt_handler = spawn(move || {
-            while let Ok(evt) = compactor_evt_rx.recv() {
-                let mut db = event_db.lock();
+        let _evt_handler = spawn(async move {
+            while let Some(evt) = compactor_evt_rx.recv().await {
+                let mut db = event_db.lock().await;
                 match evt {
                     CompactorCommand::NewSSTable(new) => {
                         db.add_sstable(new);
@@ -86,7 +87,7 @@ impl Database {
         db
     }
 
-    fn new(config: DatabaseContext, compactor_evt_tx: SyncSender<CompactorCommand>) -> Database {
+    fn new(config: DatabaseContext, compactor_evt_tx: Sender<CompactorCommand>) -> Database {
         Database {
             config,
             compactor_evt_tx,
@@ -111,9 +112,9 @@ impl Database {
     ///
     /// Flush memtable to disk and add the new disktable to our stack of disktables.
     ///
-    fn flush_to_disk(&mut self) -> Result<()> {
+    async fn flush_to_disk(&mut self) -> Result<()> {
         // make path
-        let mut path = self.config.sstable_namer.sstable_path()?;
+        let path = self.config.sstable_namer.sstable_path()?;
 
         let memory_sstable = std::mem::take(&mut self.memtable);
         let size = memory_sstable.as_ref().size()?;
@@ -121,6 +122,7 @@ impl Database {
         // update compactor
         self.compactor_evt_tx
             .send(CompactorCommand::NewSSTable(disk_table.clone()))
+            .await
             .map_err(|_| Error::SendError)?;
         self.add_sstable(disk_table);
         Arc::clone(&self.config.metrics)
@@ -140,9 +142,9 @@ impl Database {
         }
     }
 
-    fn check_flush(&mut self) -> Result<()> {
+    async fn check_flush(&mut self) -> Result<()> {
         if self.memtable.as_ref().size()? >= self.config.max_memory_bytes as _ {
-            self.flush_to_disk()?;
+            self.flush_to_disk().await?;
         }
         Ok(())
     }
@@ -157,7 +159,7 @@ impl Database {
         Ok(None)
     }
 
-    pub fn get(&self, k: &[u8]) -> Result<Option<Vec<u8>>> {
+    pub async fn get(&self, k: &[u8]) -> Result<Option<Vec<u8>>> {
         if let Some(v) = self.memtable.as_ref().get(k)? {
             return Ok(Some(v.to_vec()));
         }
@@ -165,15 +167,15 @@ impl Database {
         return self.lookup_disk(k);
     }
 
-    pub fn put(&mut self, k: Vec<u8>, v: Vec<u8>) -> Result<()> {
+    pub async fn put(&mut self, k: Vec<u8>, v: Vec<u8>) -> Result<()> {
         self.memtable.put(k, v);
-        self.check_flush()?;
+        self.check_flush().await?;
         Ok(())
     }
 
-    pub fn delete(&mut self, k: &[u8]) -> Result<()> {
+    pub async fn delete(&mut self, k: &[u8]) -> Result<()> {
         self.memtable.delete(k);
-        self.check_flush()?;
+        self.check_flush().await?;
         Ok(())
     }
 }
@@ -184,9 +186,9 @@ mod test {
 
     use super::*;
 
-    #[test]
-    fn flushes_data_to_disk_when_mem_size() {
-        let (compactor_evt_tx, compactor_evt_rx) = sync_channel(1);
+    #[tokio::test]
+    async fn flushes_data_to_disk_when_mem_size() {
+        let (compactor_evt_tx, mut compactor_evt_rx) = channel(1);
         let metrics = Arc::new(DatabaseMetrics::default());
         let config = DatabaseContext {
             max_memory_bytes: 30,
@@ -194,10 +196,10 @@ mod test {
             ..DatabaseContext::default()
         };
         let mut engine = Database::new(config, compactor_evt_tx);
-        engine.put(b"key1".to_vec(), b"value1".to_vec()).unwrap();
-        engine.put(b"key2".to_vec(), b"value2".to_vec()).unwrap();
-        engine.put(b"key3".to_vec(), b"value3".to_vec()).unwrap();
-        engine.put(b"key4".to_vec(), b"value4".to_vec()).unwrap();
+        engine.put(b"key1".to_vec(), b"value1".to_vec()).await.unwrap();
+        engine.put(b"key2".to_vec(), b"value2".to_vec()).await.unwrap();
+        engine.put(b"key3".to_vec(), b"value3".to_vec()).await.unwrap();
+        engine.put(b"key4".to_vec(), b"value4".to_vec()).await.unwrap();
         assert_eq!(
             metrics
                 .flushed_bytes
@@ -206,23 +208,23 @@ mod test {
         );
 
         assert_eq!(
-            engine.get(&b"key1".to_vec()).unwrap().unwrap(),
+            engine.get(&b"key1".to_vec()).await.unwrap().unwrap(),
             b"value1".to_vec()
         );
         assert_eq!(
-            engine.get(&b"key2".to_vec()).unwrap().unwrap(),
+            engine.get(&b"key2".to_vec()).await.unwrap().unwrap(),
             b"value2".to_vec()
         );
         assert_eq!(
-            engine.get(&b"key3".to_vec()).unwrap().unwrap(),
+            engine.get(&b"key3".to_vec()).await.unwrap().unwrap(),
             b"value3".to_vec()
         );
         assert_eq!(
-            engine.get(&b"key4".to_vec()).unwrap().unwrap(),
+            engine.get(&b"key4".to_vec()).await.unwrap().unwrap(),
             b"value4".to_vec()
         );
 
-        let evt = compactor_evt_rx.recv().unwrap();
+        let evt = compactor_evt_rx.recv().await.unwrap();
         let evt_is_new_sstable = if let CompactorCommand::NewSSTable(_) = evt {
             true
         } else {
