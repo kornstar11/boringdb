@@ -1,5 +1,6 @@
 use std::{cmp::Ordering, iter::Peekable, marker::PhantomData, sync::Arc};
 
+use futures_util::Stream;
 use parking_lot::Mutex;
 
 use super::{
@@ -37,23 +38,27 @@ impl DiskSSTableKeyValueIterator {
     }
 }
 
-impl Iterator for DiskSSTableKeyValueIterator {
+impl Stream for DiskSSTableKeyValueIterator {
     type Item = Result<(Vec<u8>, Vec<u8>)>;
 
-    fn next(&mut self) -> Option<Self::Item> {
-        while let Some(next) = self.get_next() {
-            match next {
-                Ok(Some((k, v))) => {
-                    return Some(Ok((k, v)));
-                }
-                Err(e) => {
-                    return Some(Err(e));
-                }
-                Ok(None) => { /* loop again */ }
-            }
-        }
-        return None;
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+
     }
+
+    // fn next(&mut self) -> Option<Self::Item> {
+    //     while let Some(next) = self.get_next() {
+    //         match next {
+    //             Ok(Some((k, v))) => {
+    //                 return Some(Ok((k, v)));
+    //             }
+    //             Err(e) => {
+    //                 return Some(Err(e));
+    //             }
+    //             Ok(None) => { /* loop again */ }
+    //         }
+    //     }
+    //     return None;
+    // }
 }
 
 ///
