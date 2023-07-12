@@ -364,14 +364,14 @@ impl DiskSSTable {
         DiskSSTableIterator::new(Arc::clone(&self.inner), ValueMapper {})
     }
 }
-
+#[async_trait::async_trait]
 impl SSTable<Vec<u8>> for DiskSSTable {
-    fn get(&self, k: &[u8]) -> Result<Option<Vec<u8>>> {
-        Ok(self.inner.lock().get_value(k)?)
+    async fn get(&self, k: &[u8]) -> Result<Option<Vec<u8>>> {
+        Ok(self.inner.lock().await.get_value(k).await?)
     }
 
-    fn size(&self) -> Result<usize> {
-        self.inner.lock().read_number_of_keys()
+    async fn size(&self) -> Result<usize> {
+        self.inner.lock().await.read_number_of_keys().await
     }
 }
 

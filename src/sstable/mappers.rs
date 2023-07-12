@@ -5,7 +5,7 @@ use super::Value;
 use crate::error::*;
 
 #[async_trait]
-pub trait Mapper<O> {
+pub trait Mapper<O> : Send + Sync {
     async fn map(&self, table: &mut InternalDiskSSTable, v: (&ValueIndex, &ValueIndex)) -> Result<O>;
 }
 

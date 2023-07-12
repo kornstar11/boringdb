@@ -48,10 +48,10 @@ impl ValueRef {
         }
     }
 }
-
+#[async_trait::async_trait]
 pub trait SSTable<G: AsRef<[u8]>> {
-    fn get(&self, k: &[u8]) -> Result<Option<G>>;
-    fn size(&self) -> Result<usize>;
+    async fn get(&self, k: &[u8]) -> Result<Option<G>>;
+    async fn size(&self) -> Result<usize>;
 }
 
 pub trait MutSSTable {
