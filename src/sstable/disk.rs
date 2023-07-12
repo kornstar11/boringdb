@@ -1,12 +1,12 @@
 use crate::error::*;
 use bytes::{Buf, BufMut, BytesMut};
-use parking_lot::Mutex;
+use tokio::{fs::{File, OpenOptions}, io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt}, sync::Mutex};
 use std::{
     cmp::Ordering,
-    fs::{File, OpenOptions},
-    io::{Read, Seek, SeekFrom, Write},
+    //fs::{File, OpenOptions},
+    //io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::Arc, io::SeekFrom,
 };
 
 use super::{
@@ -107,85 +107,85 @@ pub struct InternalDiskSSTable {
 }
 
 impl InternalDiskSSTable {
-    pub fn encode_it(
+    pub async fn encode_it(
         keys: impl Iterator<Item = Vec<u8>>,
         values: impl Iterator<Item = Result<ValueRef>>,
         mut file: File,
     ) -> Result<InternalDiskSSTable> {
         let mut values_to_position = ValuesToPositions::default();
-        Self::encode_values(values, &mut file, &mut values_to_position)?;
-        Self::encode_keys(keys, &mut file, values_to_position)?;
-        file.sync_all()?;
+        Self::encode_values(values, &mut file, &mut values_to_position).await?;
+        Self::encode_keys(keys, &mut file, values_to_position).await?;
+        file.sync_all().await?;
 
         Ok(InternalDiskSSTable { file })
     }
 
-    pub fn encode_inmemory_sstable(
+    pub async fn encode_inmemory_sstable(
         memory_sstable: Memtable,
         file: File,
     ) -> Result<InternalDiskSSTable> {
         let (keys, values) = memory_sstable.into_key_values();
-        Self::encode_it(keys.into_iter(), values.into_iter().map(Ok), file)
+        Self::encode_it(keys.into_iter(), values.into_iter().map(Ok), file).await
     }
 
-    fn read_u64(&mut self) -> Result<u64> {
+    async fn read_u64(&mut self) -> Result<u64> {
         let mut buf = [0u8; 8];
-        self.file.read_exact(&mut buf)?;
+        self.file.read_exact(&mut buf).await?;
         Ok(u64::from_le_bytes(buf))
     }
 
-    fn read_bytes(&mut self, len: usize) -> Result<Vec<u8>> {
+    async fn read_bytes(&mut self, len: usize) -> Result<Vec<u8>> {
         let mut buf = vec![0u8; len];
-        self.file.read_exact(&mut buf)?;
+        self.file.read_exact(&mut buf).await?;
         Ok(buf)
     }
 
-    fn read_number_of_keys(&mut self) -> Result<usize> {
-        self.file.seek(SeekFrom::End(-8))?; //find the footer
-        let keys_start_pos = self.read_u64()?;
-        self.file.seek(SeekFrom::Start(keys_start_pos))?;
-        let number_of_keys = self.read_u64()? as usize;
+    async fn read_number_of_keys(&mut self) -> Result<usize> {
+        self.file.seek(SeekFrom::End(-8)).await?; //find the footer
+        let keys_start_pos = self.read_u64().await?;
+        self.file.seek(SeekFrom::Start(keys_start_pos)).await?;
+        let number_of_keys = self.read_u64().await? as usize;
         Ok(number_of_keys)
     }
     ///
     /// Returns the positions of the sorted keys and their length
-    pub fn read_key_index(&mut self) -> Result<(Vec<ValueIndex>, Vec<ValueIndex>)> {
-        let number_of_keys = self.read_number_of_keys()?;
+    pub async fn read_key_index(&mut self) -> Result<(Vec<ValueIndex>, Vec<ValueIndex>)> {
+        let number_of_keys = self.read_number_of_keys().await?;
         let mut key_idxs = vec![];
         let mut value_idxs = vec![];
         for _ in 0..number_of_keys {
             //let key_pos = self.read_u64()? as usize;
-            key_idxs.push(self.read_value_idx()?);
-            value_idxs.push(self.read_value_idx()?);
+            key_idxs.push(self.read_value_idx().await?);
+            value_idxs.push(self.read_value_idx().await?);
         }
         Ok((key_idxs, value_idxs))
     }
 
-    pub fn read_by_value_idx(&mut self, idx: &ValueIndex) -> Result<Vec<u8>> {
-        self.file.seek(SeekFrom::Start(idx.pos as u64))?;
-        let key_buf = self.read_bytes(idx.len)?;
+    pub async fn read_by_value_idx(&mut self, idx: &ValueIndex) -> Result<Vec<u8>> {
+        self.file.seek(SeekFrom::Start(idx.pos as u64)).await?;
+        let key_buf = self.read_bytes(idx.len).await?;
         Ok(key_buf)
     }
 
-    pub fn read_value_by_value_idx(&mut self, idx: &ValueIndex) -> Result<Value> {
-        let value_buf = self.read_by_value_idx(&idx)?;
+    pub async fn read_value_by_value_idx(&mut self, idx: &ValueIndex) -> Result<Value> {
+        let value_buf = self.read_by_value_idx(&idx).await?;
         Ok(Value::decode(&value_buf))
     }
 
-    fn read_value_idx(&mut self) -> Result<ValueIndex> {
-        let idx_buf = self.read_bytes(16)?;
+    async fn read_value_idx(&mut self) -> Result<ValueIndex> {
+        let idx_buf = self.read_bytes(16).await?;
         Ok(ValueIndex::decode(&idx_buf))
     }
 
-    fn search_key_positions(&mut self, k: &[u8]) -> Result<Option<ValueIndex>> {
-        let (key_idx_to_position, value_idx_to_position) = self.read_key_index()?;
+    async fn search_key_positions(&mut self, k: &[u8]) -> Result<Option<ValueIndex>> {
+        let (key_idx_to_position, value_idx_to_position) = self.read_key_index().await?;
         let mut l = 0;
         let mut r = key_idx_to_position.len() - 1;
         while r >= l {
             let mid = (l + r) / 2;
             let key_idx = &key_idx_to_position[mid];
             let value_idx = value_idx_to_position[mid];
-            let key_buf = self.read_by_value_idx(key_idx)?;
+            let key_buf = self.read_by_value_idx(key_idx).await?;
             match k.cmp(&key_buf) {
                 Ordering::Equal => {
                     return Ok(Some(value_idx));
@@ -209,13 +209,13 @@ impl InternalDiskSSTable {
         Ok(None)
     }
 
-    fn get_value(&mut self, k: &[u8]) -> Result<Option<Vec<u8>>> {
-        let value_idx = self.search_key_positions(k)?;
+    async fn get_value(&mut self, k: &[u8]) -> Result<Option<Vec<u8>>> {
+        let value_idx = self.search_key_positions(k).await?;
         match value_idx {
             Some(ref value_idx) => {
                 if let Value {
                     value_ref: ValueRef::MemoryRef(value),
-                } = self.read_value_by_value_idx(value_idx)?
+                } = self.read_value_by_value_idx(value_idx).await?
                 {
                     return Ok(Some(value));
                 }
@@ -225,7 +225,7 @@ impl InternalDiskSSTable {
         Ok(None)
     }
 
-    fn encode_keys(
+    async fn encode_keys(
         keys: impl Iterator<Item = Vec<u8>>,
         file: &mut File,
         values_to_position: ValuesToPositions,
@@ -239,7 +239,7 @@ impl InternalDiskSSTable {
             let mut buf = BytesMut::new();
             buf.put_slice(key.as_slice());
             let len = buf.len();
-            file.write_all(&buf)?;
+            file.write_all(&buf).await?;
             position += len;
         }
         // write key index to position
@@ -253,12 +253,12 @@ impl InternalDiskSSTable {
         }
         // write keys start position
         buf.put_u64_le(keys_start_pos as u64);
-        file.write_all(&buf)?;
-        file.sync_all()?;
+        file.write_all(&buf).await?;
+        file.sync_all().await?;
         Ok(())
     }
 
-    fn encode_values(
+    async fn encode_values(
         values: impl Iterator<Item = Result<ValueRef>>,
         file: &mut File,
         values_to_position: &mut ValuesToPositions,
@@ -269,7 +269,7 @@ impl InternalDiskSSTable {
             let value = Value { value_ref };
             value.encode(&mut buf);
             let len = buf.len();
-            file.write_all(&buf)?;
+            file.write_all(&buf).await?;
             values_to_position
                 .values_to_positions
                 .push(ValueIndex::new(values_to_position.position, len));
@@ -288,12 +288,12 @@ pub struct DiskSSTable {
 }
 
 impl DiskSSTable {
-    pub fn convert_mem<P: AsRef<Path>>(path: P, memory_sstable: Memtable) -> Result<DiskSSTable> {
+    pub async fn convert_mem<P: AsRef<Path>>(path: P, memory_sstable: Memtable) -> Result<DiskSSTable> {
         let (keys, values) = memory_sstable.into_key_values();
-        Self::convert_from_iter(path, keys.into_iter(), values.into_iter().map(Ok))
+        Self::convert_from_iter(path, keys.into_iter(), values.into_iter().map(Ok)).await
     }
 
-    pub fn convert_from_iter<P: AsRef<Path>>(
+    pub async fn convert_from_iter<P: AsRef<Path>>(
         path: P,
         keys: impl Iterator<Item = Vec<u8>>,
         values: impl Iterator<Item = Result<ValueRef>>,
@@ -303,18 +303,18 @@ impl DiskSSTable {
                 .read(true)
                 .write(true)
                 .create_new(true)
-                .open(path.as_ref())?
+                .open(path.as_ref()).await?
         };
-        let inner = InternalDiskSSTable::encode_it(keys, values, file)?;
+        let inner = InternalDiskSSTable::encode_it(keys, values, file).await?;
         Ok(DiskSSTable {
             path: path.as_ref().to_path_buf(),
             inner: Arc::new(Mutex::new(inner)),
         })
     }
 
-    pub fn open<P: AsRef<Path>>(path: P) -> Result<DiskSSTable> {
+    pub async fn open<P: AsRef<Path>>(path: P) -> Result<DiskSSTable> {
         let path = path.as_ref().to_path_buf();
-        let file = File::open(path.clone())?;
+        let file = File::open(path.clone()).await?;
         let inner = InternalDiskSSTable { file };
         Ok(DiskSSTable {
             path,
@@ -340,8 +340,8 @@ impl DiskSSTable {
         self.path.clone()
     }
 
-    pub fn read_value_by_value_idx(&self, idx: &ValueIndex) -> Result<Value> {
-        self.inner.lock().read_value_by_value_idx(idx)
+    pub async fn read_value_by_value_idx(&self, idx: &ValueIndex) -> Result<Value> {
+        self.inner.lock().await.read_value_by_value_idx(idx).await
     }
 
     pub fn iter_key_values(&self) -> DiskSSTableKeyValueIterator {
