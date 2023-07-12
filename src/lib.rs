@@ -5,3 +5,4 @@ mod sstable;
 mod network;
 
 pub use engine::*;
+pub use network::ServerFactory;

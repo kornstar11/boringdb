@@ -2,7 +2,6 @@ use parking_lot::Mutex;
 use redis_protocol::resp2::prelude::*;
 use bytes::{Bytes, BytesMut};
 use redis_protocol::resp3::encode::complete::encode;
-use std::default;
 use std::io::prelude::*;
 use std::net::{TcpStream, SocketAddr, TcpListener};
 use std::sync::Arc;
@@ -11,18 +10,11 @@ use std::thread::{spawn, JoinHandle};
 use crate::{Database, DatabaseContext};
 use crate::error::*;
 
-// fn main() -> std::io::Result<()> {
-//     let mut stream = TcpStream::connect("127.0.0.1:34254")?;
 
-//     stream.write(&[1])?;
-//     stream.read(&mut [0; 128])?;
-//     Ok(())
-// }
-
-// enum DatabaseCommands {
-//     Get{key: Vec<u8>, cb: SyncSender<Result<Option<Vec<u8>>>>},
-//     Put{key: Vec<u8>, value: Vec<u8>, cb: SyncSender<Result<()>>}
-// }
+enum DatabaseCommands {
+    Get{key: Vec<u8>},
+    Put{key: Vec<u8>, value: Vec<u8>}
+}
 
 // impl DatabaseCommands {
 //     fn get(key: Vec<u8>) -> (DatabaseCommands, Receiver<Result<Option<Vec<u8>>>>) {
@@ -66,24 +58,46 @@ impl ServerState {
             db
         }
     }
+
+
+    fn decode_state(&self, frame: Frame) -> Frame {
+        println!("Frame: {:?}", frame);
+        // match frame {
+        //     Frame::Array(frames) => {
+        //         if let Some(Frame::SimpleString(cmd)) = frames.get(0) {
+        //             if cmd.as_ref() == b"GET" && frames.len() == 2 {
+        //                 self.db.lock().get(k)
+        //             }
+
+        //         }
+        //     }
+        // }
+
+        //Frame::BulkString(Bytes::from_static(b"OK"))
+        Frame::Array(vec![])
+
+    }
     
 }
 
 #[derive(Clone)]
-struct ServerFactory {
-    addr: SocketAddr,
-    outstanding_requests: usize,
+pub struct ServerFactory {
+    pub addr: SocketAddr,
+    pub outstanding_requests: usize,
 }
 
 impl ServerFactory {
-    pub fn start(&self) -> JoinHandle<()> {
+
+    pub fn start(&self) -> Result<()> {
         let (tx, rx) = sync_channel::<FrameWithCallback>(self.outstanding_requests);
 
-
-        let forwarder = spawn(move || {
+        let forwarder_thread = spawn(move || {
             let mut state = ServerState::new();
             while let Ok(cmd) = rx.recv() {
                 let (frame, cb) = cmd.split();
+                if let Err(_) = cb.send(state.decode_state(frame)) {
+                    break;
+                }
 
                     // DatabaseCommands::Get { key, cb } => {
                     //     if let Err(_) = cb.send(state.db.lock().get(key.as_ref())) {
@@ -102,12 +116,16 @@ impl ServerFactory {
         });
         let network_self = self.clone();
         let network_thread = spawn(move || {
+            log::info!("Server binding to TCP {:?}", network_self.addr);
             match TcpListener::bind(network_self.addr) {
                 Ok(tcp) => {
-                    while let Ok((stream, _remote)) = tcp.accept() {
+                    log::info!("Accepting connections");
+                    while let Ok((stream, remote)) = tcp.accept() {
+                        log::info!("Accepting connection from {:?}", remote);
                         if let Err(e) = Self::handler(stream, tx.clone()) {
                             log::warn!("Client error: {:?}", e);
                         }
+                        log::info!("Closed connection.");
                     }
 
                 },
@@ -117,15 +135,19 @@ impl ServerFactory {
                 }
             }
         });
-        todo!()
+
+        forwarder_thread.join().map_err(|_| Error::Other(String::from("Unable to join forwarder thread.")))?;
+        network_thread.join().map_err(|_| Error::Other(String::from("Unable to join network thread.")))?;
+        Ok(())
     }
 
     fn handler(mut stream: TcpStream, tx_commands: SyncSender<FrameWithCallback>) -> Result<()> {
+        let cap = 1024;
         let mut outer_buf = BytesMut::new();
-        let mut buf = BytesMut::with_capacity(1024);//[0 as u8; 1024];
+        let mut buf = BytesMut::zeroed(cap);//[0 as u8; 1024];
+        let mut send_buf = BytesMut::zeroed(cap);//[0 as u8; 1024];
         while let Ok(bytes_read) = stream.read(&mut buf) {
             if bytes_read == 0 {
-                log::info!("Closed connection.");
                 return Ok(());
             }
             //let bytes = buf.clone().freeze();
@@ -133,12 +155,16 @@ impl ServerFactory {
                 Ok(Some((frame, _read, _consumed))) => {
                     let (frame_with_cb, cb) = FrameWithCallback::new(frame);
                     if let Err(_) = tx_commands.send(frame_with_cb) {
-                        log::info!("Recv loop closed.");
+                        log::debug!("Recv loop closed.");
                         return Ok(());
                     }
                     if let Ok(resp) = cb.recv() {
-                        let encode = encode(buf, offset, frame)
-
+                        send_buf.clear();
+                        log::debug!("Sending back: {:?}", resp);
+                        let encode_len = encode_bytes(&mut send_buf, &resp)
+                            .map_err(Error::Redis)?;
+                        log::debug!("Encoded bytes to send: {}", encode_len);
+                        stream.write(&send_buf[0..encode_len])?;
                     }
                     
                 },
@@ -155,19 +181,7 @@ impl ServerFactory {
             }
         }
 
-        todo!()
-
-        // while let Ok(frame_opt) = decode(stream.read(&mut buf)) {
-        //     match frame_opt {
-        //         Some((frame, _))
-        //     }
-        // }
-
-        // let (frame, consumed) = match decode(&buf) {
-        //     Ok(Some((f, c))) => (f, c),
-        //     Ok(None) => panic!("Incomplete frame."),
-        //     Err(e) => panic!("Error parsing bytes: {:?}", e)
-        //   };
+        Ok(())
     }
     
 }
