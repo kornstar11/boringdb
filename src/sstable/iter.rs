@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, iter::Peekable, marker::PhantomData, sync::Arc};
+use std::{cmp::Ordering, iter::Peekable, marker::PhantomData, sync::Arc, task::{Poll, Context}, pin::Pin};
 
 use futures_util::Stream;
 use parking_lot::Mutex;
@@ -81,10 +81,18 @@ impl<O: Send, M: Mapper<O>> DiskSSTableIterator<O, M> {
             phant: Default::default(),
         }
     }
-    fn get_next(&mut self) -> Result<Option<O>> {
+
+
+    async fn get_next(&mut self) -> Result<Option<O>> {
         let table = Arc::clone(&self.table);
         let mut table = table.lock();
-        let index = self.index.get_or_insert_with(|| table.read_key_index());
+        let index = if let Some(ref idx) = self.index {
+            idx
+        } else {
+            let idx = table.read_key_index().await;
+            self.index = Some(idx);
+            self.index.as_ref().unwrap()
+        };
 
         match index {
             Ok((key_idxs, value_idxs)) => {
@@ -99,7 +107,7 @@ impl<O: Send, M: Mapper<O>> DiskSSTableIterator<O, M> {
                     return Ok(None);
                 };
 
-                let mapped = self.mapper.map(&mut table, (key_idx, value_idx))?;
+                let mapped = self.mapper.map(&mut table, (key_idx, value_idx)).await?;
 
                 self.pos += 1;
                 return Ok(Some(mapped));
@@ -109,13 +117,13 @@ impl<O: Send, M: Mapper<O>> DiskSSTableIterator<O, M> {
     }
 }
 
-impl<O: Send, M: Mapper<O>> Iterator for DiskSSTableIterator<O, M> {
+impl<O: Send, M: Mapper<O>> Stream for DiskSSTableIterator<O, M> {
     type Item = Result<O>;
 
-    fn next(&mut self) -> Option<Self::Item> {
-        let next = self.get_next().transpose();
-        next
-    }
+    // fn next(&mut self) -> Option<Self::Item> {
+    //     let next = self.get_next().transpose();
+    //     next
+    // }
 }
 
 //pub struct
