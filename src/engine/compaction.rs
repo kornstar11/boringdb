@@ -1,3 +1,4 @@
+use futures_util::{StreamExt, FutureExt, TryFutureExt};
 use tokio::{task::JoinHandle, sync::mpsc::{channel, Receiver}, spawn};
 
 use super::{CompactorCommand, SSTableNamer};
@@ -29,7 +30,7 @@ struct SimpleCompactorState {
 impl SimpleCompactorState {
     ///
     /// Returns a Vec<> of paths to delete as well as a new SSTable
-    fn compact(&mut self) -> Result<(Vec<PathBuf>, DiskSSTable)> {
+    async fn compact(&mut self) -> Result<(Vec<PathBuf>, DiskSSTable)> {
         let mut to_merge = std::mem::take(&mut self.tracked_sstables)
             .into_values()
             .collect::<Vec<_>>();
@@ -38,19 +39,32 @@ impl SimpleCompactorState {
             .map(|table| table.iter_key_idxs())
             .collect::<Vec<_>>();
         let sorted_iter =
-            SortedDiskSSTableKeyValueIterator::new(iters).collect::<Result<Vec<_>>>()?;
-        let key_it = sorted_iter.iter().map(|(k, _, _, _)| k.to_vec());
-        let value_it = sorted_iter.iter().map(|(_, idx, _, vidx)| {
-            if let Some(table) = to_merge.get_mut(*idx) {
-                table.read_value_by_value_idx(&vidx).map(|v| v.value_ref)
-            } else {
-                Err(Error::Other(String::from(
-                    "while compacting, unable to locate indexed table.",
-                )))
+            SortedDiskSSTableKeyValueIterator::new(iters)
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
+        // todo 
+        let key_it = futures_util::stream::iter(sorted_iter.clone().into_iter().map(|(k, _, _, _)| k.to_vec())).boxed();
+        let to_merge_inner = to_merge.clone();
+        let value_it = futures_util::stream::iter(sorted_iter.clone().into_iter()).then(move |(_, idx, _, vidx)| {
+            let mut to_merge_inner = to_merge_inner.clone();
+            async move {
+                if let Some(table) = to_merge_inner.get_mut(idx) {
+                    table
+                        .read_value_by_value_idx(&vidx)
+                        .and_then(|v| async move{ Ok(v.value_ref)})
+                        .await
+                } else {
+                    Err(Error::Other(String::from(
+                        "while compacting, unable to locate indexed table.",
+                    )))
+                }
             }
-        });
+        }).boxed();
         let path = self.config.namer.sstable_path()?;
-        let new_ss_table = DiskSSTable::convert_from_iter(path, key_it, value_it)?;
+        let new_ss_table = DiskSSTable::convert_from_iter(path, key_it, value_it)
+            .await?;
         Ok((
             to_merge.into_iter().map(|table| table.path()).collect(),
             new_ss_table,
@@ -99,7 +113,7 @@ impl CompactorFactory for SimpleCompactorFactory {
                         CompactorCommand::NewSSTable(table) => {
                             state.tracked_sstables.insert(table.path(), table);
                             if state.tracked_sstables.len() >= config.max_ss_tables {
-                                let (to_delete, new_table) = state.compact().unwrap();
+                                let (to_delete, new_table) = state.compact().await.unwrap();
                                 if let Err(_) = tx.send(CompactorCommand::NewSSTable(new_table)).await {
                                     break;
                                 }

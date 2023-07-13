@@ -88,7 +88,7 @@ impl<O: Send, M: Mapper<O>> DiskSSTableIterator<O, M> {
     }
 
 
-    fn get_next(&mut self) -> Pin<Box<dyn Future<Output = Result<Option<O>> > + Send>> {
+    fn get_next(&mut self) -> Pin<Box<dyn Future<Output = Result<Option<O>> > + Send + '_>> {
         async move {
             let table = Arc::clone(&self.table);
             let mut table = table.lock().await;

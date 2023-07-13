@@ -59,49 +59,49 @@ pub trait MutSSTable {
     fn delete(&mut self, k: &[u8]) -> bool;
 }
 
-#[cfg(test)]
-pub mod test {
-    use std::time;
+// #[cfg(test)]
+// pub mod test {
+//     use std::time;
 
-    use super::{disk::InternalDiskSSTable, Memtable, MutSSTable};
+//     use super::{disk::InternalDiskSSTable, Memtable, MutSSTable};
 
-    pub fn time_ms() -> u128 {
-        let time = time::SystemTime::now()
-            .duration_since(time::UNIX_EPOCH)
-            .unwrap()
-            .as_micros();
-        time
-    }
+//     pub fn time_ms() -> u128 {
+//         let time = time::SystemTime::now()
+//             .duration_since(time::UNIX_EPOCH)
+//             .unwrap()
+//             .as_micros();
+//         time
+//     }
 
-    pub fn generate_kvs() -> Box<dyn Iterator<Item = (String, String)>> {
-        Box::new((0..10).map(|i| (format!("k{}", i), format!("v{}", i))))
-    }
+//     pub fn generate_kvs() -> Box<dyn Iterator<Item = (String, String)>> {
+//         Box::new((0..10).map(|i| (format!("k{}", i), format!("v{}", i))))
+//     }
 
-    pub fn generate_even_kvs() -> Box<dyn Iterator<Item = (String, String)>> {
-        Box::new(
-            (0..10)
-                .filter(|x| x % 2 == 0)
-                .map(|i| (format!("k{}", i), format!("v{}", i))),
-        )
-    }
-    pub fn generate_odd_kvs() -> Box<dyn Iterator<Item = (String, String)>> {
-        Box::new(
-            (0..10)
-                .filter(|x| x % 2 == 1)
-                .map(|i| (format!("k{}", i), format!("v{}", i))),
-        )
-    }
+//     pub fn generate_even_kvs() -> Box<dyn Iterator<Item = (String, String)>> {
+//         Box::new(
+//             (0..10)
+//                 .filter(|x| x % 2 == 0)
+//                 .map(|i| (format!("k{}", i), format!("v{}", i))),
+//         )
+//     }
+//     pub fn generate_odd_kvs() -> Box<dyn Iterator<Item = (String, String)>> {
+//         Box::new(
+//             (0..10)
+//                 .filter(|x| x % 2 == 1)
+//                 .map(|i| (format!("k{}", i), format!("v{}", i))),
+//         )
+//     }
 
-    pub fn generate_memory(it: Box<dyn Iterator<Item = (String, String)>>) -> Memtable {
-        let mut memory = Memtable::default();
-        for (k, v) in it {
-            memory.put(k.as_bytes().to_vec(), v.as_bytes().to_vec());
-        }
-        memory
-    }
-    pub fn generate_disk(memory: Memtable) -> InternalDiskSSTable {
-        let file = tempfile::tempfile().unwrap();
-        println!("file: {:?}", file);
-        InternalDiskSSTable::encode_inmemory_sstable(memory, file).unwrap()
-    }
-}
+//     pub fn generate_memory(it: Box<dyn Iterator<Item = (String, String)>>) -> Memtable {
+//         let mut memory = Memtable::default();
+//         for (k, v) in it {
+//             memory.put(k.as_bytes().to_vec(), v.as_bytes().to_vec());
+//         }
+//         memory
+//     }
+//     pub fn generate_disk(memory: Memtable) -> InternalDiskSSTable {
+//         let file = tempfile::tempfile().unwrap();
+//         println!("file: {:?}", file);
+//         InternalDiskSSTable::encode_inmemory_sstable(memory, file).unwrap()
+//     }
+// }

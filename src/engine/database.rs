@@ -96,13 +96,13 @@ impl Database {
         }
     }
 
-    fn load(base_dir: PathBuf) -> Result<Vec<DiskSSTable>> {
+    async fn load(base_dir: PathBuf) -> Result<Vec<DiskSSTable>> {
         let mut disk_sstables = Vec::new();
         for entry in std::fs::read_dir(base_dir)? {
             let entry = entry?;
             let path = entry.path();
             if path.is_file() && path.to_str().unwrap().starts_with(SSTABLE_FILE_PREFIX) {
-                disk_sstables.push(DiskSSTable::open(path)?);
+                disk_sstables.push(DiskSSTable::open(path).await?);
             }
         }
         disk_sstables.sort_by_key(|s| s.path().to_string_lossy().to_string());
@@ -117,8 +117,8 @@ impl Database {
         let path = self.config.sstable_namer.sstable_path()?;
 
         let memory_sstable = std::mem::take(&mut self.memtable);
-        let size = memory_sstable.as_ref().size()?;
-        let disk_table = DiskSSTable::convert_mem(path.clone(), memory_sstable)?;
+        let size = memory_sstable.as_ref().size().await?;
+        let disk_table = DiskSSTable::convert_mem(path.clone(), memory_sstable).await?;
         // update compactor
         self.compactor_evt_tx
             .send(CompactorCommand::NewSSTable(disk_table.clone()))
@@ -143,16 +143,16 @@ impl Database {
     }
 
     async fn check_flush(&mut self) -> Result<()> {
-        if self.memtable.as_ref().size()? >= self.config.max_memory_bytes as _ {
+        if self.memtable.as_ref().size().await? >= self.config.max_memory_bytes as _ {
             self.flush_to_disk().await?;
         }
         Ok(())
     }
 
-    fn lookup_disk(&self, k: &[u8]) -> Result<Option<Vec<u8>>> {
+    async fn lookup_disk(&self, k: &[u8]) -> Result<Option<Vec<u8>>> {
         for (_path, table) in self.disk_sstables.iter() {
             //BF stuff TODO
-            if let Some(v) = table.get(k)? {
+            if let Some(v) = table.get(k).await? {
                 return Ok(Some(v));
             }
         }
@@ -160,11 +160,11 @@ impl Database {
     }
 
     pub async fn get(&self, k: &[u8]) -> Result<Option<Vec<u8>>> {
-        if let Some(v) = self.memtable.as_ref().get(k)? {
+        if let Some(v) = self.memtable.as_ref().get(k).await? {
             return Ok(Some(v.to_vec()));
         }
 
-        return self.lookup_disk(k);
+        return self.lookup_disk(k).await;
     }
 
     pub async fn put(&mut self, k: Vec<u8>, v: Vec<u8>) -> Result<()> {
