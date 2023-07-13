@@ -1,34 +1,26 @@
+use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use redis_protocol::resp2::prelude::*;
 use bytes::{Bytes, BytesMut};
 use redis_protocol::resp3::encode::complete::encode;
 use std::io::prelude::*;
 use std::net::{TcpStream, SocketAddr, TcpListener};
-use std::sync::Arc;
+use std::sync::{Arc};
 use std::sync::mpsc::{sync_channel, SyncSender, Receiver};
 use std::thread::{spawn, JoinHandle};
 use crate::{Database, DatabaseContext};
 use crate::error::*;
 
+static ERRORMSG: &str ="Unknown command";
 
-enum DatabaseCommands {
-    Get{key: Vec<u8>},
-    Put{key: Vec<u8>, value: Vec<u8>}
-}
+static ERROR_FRAME: Lazy<Frame> = Lazy::new(|| {
+    Frame::Error(ERRORMSG.into())
+});
 
-// impl DatabaseCommands {
-//     fn get(key: Vec<u8>) -> (DatabaseCommands, Receiver<Result<Option<Vec<u8>>>>) {
-//         let (cb, rx) = sync_channel(1);
-//         let cmd = Self::Get{key, cb};
-//         (cmd, rx)
-//     }
+static OK_FRAME: Lazy<Frame> = Lazy::new(|| {
+    Frame::BulkString("OK".into())
+});
 
-//     fn put(key: Vec<u8>, value: Vec<u8>) -> (DatabaseCommands, Receiver<Result<()>>) {
-//         let (cb, rx) = sync_channel(1);
-//         let cmd = Self::Put{key, value, cb};
-//         (cmd, rx)
-//     }
-// }
 
 struct FrameWithCallback {
     frame: Frame,
@@ -61,20 +53,61 @@ impl ServerState {
 
 
     fn decode_state(&self, frame: Frame) -> Frame {
-        println!("Frame: {:?}", frame);
-        // match frame {
-        //     Frame::Array(frames) => {
-        //         if let Some(Frame::SimpleString(cmd)) = frames.get(0) {
-        //             if cmd.as_ref() == b"GET" && frames.len() == 2 {
-        //                 self.db.lock().get(k)
-        //             }
+        log::trace!("RESP Frame: {:?}", frame);
+        match frame {
+            Frame::Array(frames) => {
+                if let Some((Frame::BulkString(cmd), args)) = frames.split_first() {
+                    match cmd.as_ref() {
+                        b"DEL" => {
+                            if let [Frame::BulkString(key_bytes)] = args {
+                                match self.db.lock().delete(&key_bytes) {
+                                    Ok(()) => {
+                                        return OK_FRAME.clone();
+                                    },
+                                    Err(e) => {
+                                        log::warn!("Client error: {}", e.to_string());
+                                        return Frame::Error(e.to_string().into());
+                                    }
+                                }
+                            }
+                        },
+                        b"GET" => {
+                            if let [Frame::BulkString(key_bytes)] = args {
+                                match self.db.lock().get(&key_bytes) {
+                                    Ok(Some(v)) => {
+                                        return Frame::BulkString(Bytes::copy_from_slice(&v));
+                                    },
+                                    Ok(None) => {
+                                        return Frame::Null;
+                                    },
+                                    Err(e) => {
+                                        log::warn!("Client error: {}", e.to_string());
+                                        return Frame::Error(e.to_string().into());
+                                    }
+                                }
+                            }
+                        },
+                        b"PUT" => {
+                            if let [Frame::BulkString(key_bytes), Frame::BulkString(value_bytes)] = args {
+                                match self.db.lock().put(key_bytes.to_vec(), value_bytes.to_vec()) {
+                                    Ok(()) => {
+                                        return OK_FRAME.clone();
+                                    },
+                                    Err(e) => {
+                                        log::warn!("Client error durring put: {}", e.to_string());
+                                        return Frame::Error(e.to_string().into());
+                                    }
+                                }
+                            }
+                        },
+                        _ => {}
+                    }
+                }
+            },
+            _ => {}
+        };
 
-        //         }
-        //     }
-        // }
-
-        //Frame::BulkString(Bytes::from_static(b"OK"))
-        Frame::Array(vec![])
+        ERROR_FRAME.clone()
 
     }
     
