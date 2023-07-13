@@ -1,12 +1,12 @@
 use std::{path::PathBuf, time};
 
-use crate::sstable::DiskSSTable;
 use crate::error::*;
+use crate::sstable::DiskSSTable;
 mod compaction;
 mod database;
 
+pub use compaction::{SimpleCompactorConfig, SimpleCompactorFactory};
 pub use database::{Database, DatabaseContext};
-pub use compaction::{SimpleCompactorFactory, SimpleCompactorConfig};
 
 pub const SSTABLE_FILE_PREFIX: &str = "sstable_";
 ///
@@ -22,7 +22,9 @@ pub struct SSTableNamer {
 
 impl Default for SSTableNamer {
     fn default() -> Self {
-        Self{ base_dir: PathBuf::from("/tmp")}
+        Self {
+            base_dir: PathBuf::from("/tmp"),
+        }
     }
 }
 

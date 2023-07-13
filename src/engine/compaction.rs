@@ -66,7 +66,10 @@ pub struct SimpleCompactorConfig {
 
 impl Default for SimpleCompactorConfig {
     fn default() -> Self {
-        Self { max_ss_tables: 2, namer: SSTableNamer::default() }
+        Self {
+            max_ss_tables: 2,
+            namer: SSTableNamer::default(),
+        }
     }
 }
 
@@ -86,7 +89,7 @@ impl CompactorFactory for SimpleCompactorFactory {
         compactor_evt_rx: Receiver<CompactorCommand>,
     ) -> (Receiver<CompactorCommand>, JoinHandle<Result<()>>) {
         let (tx, rx) = sync_channel(1);
-        let mut state = SimpleCompactorState{
+        let mut state = SimpleCompactorState {
             config: self.config.clone(),
             ..Default::default()
         };

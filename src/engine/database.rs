@@ -28,7 +28,6 @@ pub struct DatabaseContext {
     pub metrics: Arc<DatabaseMetrics>,
 }
 
-
 impl Clone for DatabaseContext {
     fn clone(&self) -> Self {
         Self {

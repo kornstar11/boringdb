@@ -1,30 +1,25 @@
+use crate::error::*;
+use crate::{Database, DatabaseContext};
+use bytes::{Bytes, BytesMut};
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use redis_protocol::resp2::prelude::*;
-use bytes::{Bytes, BytesMut};
 use redis_protocol::resp3::encode::complete::encode;
 use std::io::prelude::*;
-use std::net::{TcpStream, SocketAddr, TcpListener};
-use std::sync::{Arc};
-use std::sync::mpsc::{sync_channel, SyncSender, Receiver};
+use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use std::sync::Arc;
 use std::thread::{spawn, JoinHandle};
-use crate::{Database, DatabaseContext};
-use crate::error::*;
 
-static ERRORMSG: &str ="Unknown command";
+static ERRORMSG: &str = "Unknown command";
 
-static ERROR_FRAME: Lazy<Frame> = Lazy::new(|| {
-    Frame::Error(ERRORMSG.into())
-});
+static ERROR_FRAME: Lazy<Frame> = Lazy::new(|| Frame::Error(ERRORMSG.into()));
 
-static OK_FRAME: Lazy<Frame> = Lazy::new(|| {
-    Frame::BulkString("OK".into())
-});
-
+static OK_FRAME: Lazy<Frame> = Lazy::new(|| Frame::BulkString("OK".into()));
 
 struct FrameWithCallback {
     frame: Frame,
-    cb: SyncSender<Frame>
+    cb: SyncSender<Frame>,
 }
 
 impl FrameWithCallback {
@@ -34,23 +29,20 @@ impl FrameWithCallback {
 
     fn new(frame: Frame) -> (Self, Receiver<Frame>) {
         let (cb, rx) = sync_channel(1);
-        (Self{frame, cb}, rx)
+        (Self { frame, cb }, rx)
     }
 }
 
 //6379
 struct ServerState {
-    db: Arc<Mutex<Database>>
+    db: Arc<Mutex<Database>>,
 }
 
 impl ServerState {
     fn new() -> Self {
         let db = Database::start(DatabaseContext::default());
-        Self {
-            db
-        }
+        Self { db }
     }
-
 
     fn decode_state(&self, frame: Frame) -> Frame {
         log::trace!("RESP Frame: {:?}", frame);
@@ -63,54 +55,54 @@ impl ServerState {
                                 match self.db.lock().delete(&key_bytes) {
                                     Ok(()) => {
                                         return OK_FRAME.clone();
-                                    },
+                                    }
                                     Err(e) => {
                                         log::warn!("Client error: {}", e.to_string());
                                         return Frame::Error(e.to_string().into());
                                     }
                                 }
                             }
-                        },
+                        }
                         b"GET" => {
                             if let [Frame::BulkString(key_bytes)] = args {
                                 match self.db.lock().get(&key_bytes) {
                                     Ok(Some(v)) => {
                                         return Frame::BulkString(Bytes::copy_from_slice(&v));
-                                    },
+                                    }
                                     Ok(None) => {
                                         return Frame::Null;
-                                    },
+                                    }
                                     Err(e) => {
                                         log::warn!("Client error: {}", e.to_string());
                                         return Frame::Error(e.to_string().into());
                                     }
                                 }
                             }
-                        },
+                        }
                         b"PUT" => {
-                            if let [Frame::BulkString(key_bytes), Frame::BulkString(value_bytes)] = args {
+                            if let [Frame::BulkString(key_bytes), Frame::BulkString(value_bytes)] =
+                                args
+                            {
                                 match self.db.lock().put(key_bytes.to_vec(), value_bytes.to_vec()) {
                                     Ok(()) => {
                                         return OK_FRAME.clone();
-                                    },
+                                    }
                                     Err(e) => {
                                         log::warn!("Client error durring put: {}", e.to_string());
                                         return Frame::Error(e.to_string().into());
                                     }
                                 }
                             }
-                        },
+                        }
                         _ => {}
                     }
                 }
-            },
+            }
             _ => {}
         };
 
         ERROR_FRAME.clone()
-
     }
-    
 }
 
 #[derive(Clone)]
@@ -120,7 +112,6 @@ pub struct ServerFactory {
 }
 
 impl ServerFactory {
-
     pub fn start(&self) -> Result<()> {
         let (tx, rx) = sync_channel::<FrameWithCallback>(self.outstanding_requests);
 
@@ -132,18 +123,18 @@ impl ServerFactory {
                     break;
                 }
 
-                    // DatabaseCommands::Get { key, cb } => {
-                    //     if let Err(_) = cb.send(state.db.lock().get(key.as_ref())) {
-                    //         log::warn!("Callback dead.");
-                    //         return;
-                    //     }
-                    // },
-                    // DatabaseCommands::Put { key, value, cb } => {
-                    //     if let Err(_) = cb.send(state.db.lock().put(key, value)) {
-                    //         log::warn!("Callback dead.");
-                    //         return;
-                    //     }
-                    // }
+                // DatabaseCommands::Get { key, cb } => {
+                //     if let Err(_) = cb.send(state.db.lock().get(key.as_ref())) {
+                //         log::warn!("Callback dead.");
+                //         return;
+                //     }
+                // },
+                // DatabaseCommands::Put { key, value, cb } => {
+                //     if let Err(_) = cb.send(state.db.lock().put(key, value)) {
+                //         log::warn!("Callback dead.");
+                //         return;
+                //     }
+                // }
             }
             log::info!("Stopping network thread (db)");
         });
@@ -160,8 +151,7 @@ impl ServerFactory {
                         }
                         log::info!("Closed connection.");
                     }
-
-                },
+                }
                 Err(e) => {
                     log::error!("Unable to bind, due to: {:?}", e);
                     return;
@@ -169,16 +159,20 @@ impl ServerFactory {
             }
         });
 
-        forwarder_thread.join().map_err(|_| Error::Other(String::from("Unable to join forwarder thread.")))?;
-        network_thread.join().map_err(|_| Error::Other(String::from("Unable to join network thread.")))?;
+        forwarder_thread
+            .join()
+            .map_err(|_| Error::Other(String::from("Unable to join forwarder thread.")))?;
+        network_thread
+            .join()
+            .map_err(|_| Error::Other(String::from("Unable to join network thread.")))?;
         Ok(())
     }
 
     fn handler(mut stream: TcpStream, tx_commands: SyncSender<FrameWithCallback>) -> Result<()> {
         let cap = 1024;
         let mut outer_buf = BytesMut::new();
-        let mut buf = BytesMut::zeroed(cap);//[0 as u8; 1024];
-        let mut send_buf = BytesMut::zeroed(cap);//[0 as u8; 1024];
+        let mut buf = BytesMut::zeroed(cap); //[0 as u8; 1024];
+        let mut send_buf = BytesMut::zeroed(cap); //[0 as u8; 1024];
         while let Ok(bytes_read) = stream.read(&mut buf) {
             if bytes_read == 0 {
                 return Ok(());
@@ -194,20 +188,21 @@ impl ServerFactory {
                     if let Ok(resp) = cb.recv() {
                         send_buf.clear();
                         log::debug!("Sending back: {:?}", resp);
-                        let encode_len = encode_bytes(&mut send_buf, &resp)
-                            .map_err(Error::Redis)?;
+                        let encode_len =
+                            encode_bytes(&mut send_buf, &resp).map_err(Error::Redis)?;
                         log::debug!("Encoded bytes to send: {}", encode_len);
                         stream.write(&send_buf[0..encode_len])?;
                     }
-                    
-                },
+                }
                 Ok(None) if outer_buf.len() <= 1000_000 => {
                     // not enough bytes so save it off
                     outer_buf.extend_from_slice(buf.as_ref())
-                },
+                }
                 Ok(None) => {
-                    return Err(Error::Other(String::from("Unable to make a frame, since we exceeded the max_bytes")));
-                },
+                    return Err(Error::Other(String::from(
+                        "Unable to make a frame, since we exceeded the max_bytes",
+                    )));
+                }
                 Err(e) => {
                     return Err(Error::Redis(e));
                 }
@@ -216,5 +211,4 @@ impl ServerFactory {
 
         Ok(())
     }
-    
 }

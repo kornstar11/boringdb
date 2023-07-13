@@ -1,8 +1,8 @@
 mod engine;
 pub mod error;
 mod log;
-mod sstable;
 mod network;
+mod sstable;
 
 pub use engine::*;
 pub use network::ServerFactory;
