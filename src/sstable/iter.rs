@@ -79,7 +79,7 @@ impl<O: Send, M: Mapper<O>> DiskSSTableIterator<O, M> {
     fn get_next(&mut self) -> Result<Option<O>> {
         let table = Arc::clone(&self.table);
         let mut table = table.lock();
-        let index = self.index.get_or_insert_with(|| table.read_key_index());
+        let index = self.index.get_or_insert_with(|| table.read_key_index().map(|idx| idx.as_ref().clone()));
 
         match index {
             Ok((key_idxs, value_idxs)) => {

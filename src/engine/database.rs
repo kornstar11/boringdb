@@ -43,7 +43,7 @@ impl Default for DatabaseContext {
     fn default() -> Self {
         Self {
             sstable_namer: SSTableNamer::default(),
-            max_memory_bytes: 1024 * 1000, // 10MB
+            max_memory_bytes: 1024 * 1000, // 1MB
             compactor_factory: Box::new(SimpleCompactorFactory::default()),
             metrics: Arc::new(DatabaseMetrics::default()),
         }

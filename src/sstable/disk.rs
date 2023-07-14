@@ -87,7 +87,7 @@ impl Value {
         }
     }
 }
-
+type KeyValueIdxPair = (Vec<ValueIndex>, Vec<ValueIndex>);
 ///
 /// Immutable SSTable stored on Disk. The general file layout is as follows:
 /// ```text
@@ -104,6 +104,7 @@ impl Value {
 /// that we can load the keys quicker when comparing sstables.
 pub struct InternalDiskSSTable {
     file: File,
+    key_value_idx_pair: Option<Arc<KeyValueIdxPair>>
 }
 
 impl InternalDiskSSTable {
@@ -117,7 +118,7 @@ impl InternalDiskSSTable {
         Self::encode_keys(keys, &mut file, values_to_position)?;
         file.sync_all()?;
 
-        Ok(InternalDiskSSTable { file })
+        Ok(InternalDiskSSTable { file, key_value_idx_pair: None })
     }
 
     pub fn encode_inmemory_sstable(
@@ -149,7 +150,10 @@ impl InternalDiskSSTable {
     }
     ///
     /// Returns the positions of the sorted keys and their length
-    pub fn read_key_index(&mut self) -> Result<(Vec<ValueIndex>, Vec<ValueIndex>)> {
+    pub fn read_key_index(&mut self) -> Result<Arc<KeyValueIdxPair>> {
+        if let Some(ref key_value_idx_pair) = self.key_value_idx_pair {
+            return Ok(Arc::clone(key_value_idx_pair))
+        }
         let number_of_keys = self.read_number_of_keys()?;
         let mut key_idxs = vec![];
         let mut value_idxs = vec![];
@@ -158,7 +162,9 @@ impl InternalDiskSSTable {
             key_idxs.push(self.read_value_idx()?);
             value_idxs.push(self.read_value_idx()?);
         }
-        Ok((key_idxs, value_idxs))
+        let key_value_idx_pair = Arc::new((key_idxs, value_idxs));
+        self.key_value_idx_pair = Some(Arc::clone(&key_value_idx_pair));
+        return Ok(key_value_idx_pair);
     }
 
     pub fn read_by_value_idx(&mut self, idx: &ValueIndex) -> Result<Vec<u8>> {
@@ -178,7 +184,8 @@ impl InternalDiskSSTable {
     }
 
     fn search_key_positions(&mut self, k: &[u8]) -> Result<Option<ValueIndex>> {
-        let (key_idx_to_position, value_idx_to_position) = self.read_key_index()?;
+        let read_key_idx = self.read_key_index()?;
+        let (key_idx_to_position, value_idx_to_position) = read_key_idx.as_ref();
         let mut l = 0;
         let mut r = key_idx_to_position.len() - 1;
         while r >= l {
@@ -315,7 +322,7 @@ impl DiskSSTable {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<DiskSSTable> {
         let path = path.as_ref().to_path_buf();
         let file = File::open(path.clone())?;
-        let inner = InternalDiskSSTable { file };
+        let inner = InternalDiskSSTable { file, key_value_idx_pair: None };
         Ok(DiskSSTable {
             path,
             inner: Arc::new(Mutex::new(inner)),
