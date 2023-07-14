@@ -1,51 +1,37 @@
 use parking_lot::Mutex;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::Arc;
 use std::thread::spawn;
-use std::{collections::BTreeMap, fs::File, path::PathBuf, time};
+use std::{collections::BTreeMap, path::PathBuf};
 
 use crate::{error::*, sstable::*};
 
 use super::compaction::{CompactorFactory, SimpleCompactorFactory};
-use super::CompactorCommand;
+use super::{CompactorCommand, SSTableNamer, SSTABLE_FILE_PREFIX};
 
 ///
 /// Engine handle managment of the SSTables. It is responsible for converting a memory SSTable into a disk SSTable.
 /// Also handled are management of Bloomfilters for the DiskSSTables.
 ///
 /// TODO need a WAL to make memtable safe...
-const SSTABLE_FILE_PREFIX: &str = "sstable_";
 
 #[derive(Default)]
 pub struct DatabaseMetrics {
     flushed_bytes: AtomicUsize,
 }
-pub struct DatabaseConfig {
-    pub base_dir: PathBuf,
+pub struct DatabaseContext {
+    pub sstable_namer: SSTableNamer,
     pub max_memory_bytes: u64,
     pub compactor_factory: Box<dyn CompactorFactory>,
     pub metrics: Arc<DatabaseMetrics>,
 }
 
-impl DatabaseConfig {
-    pub fn sstable_path(&self) -> Result<PathBuf> {
-        let time = time::SystemTime::now()
-            .duration_since(time::UNIX_EPOCH)
-            .map_err(Error::TimeError)?
-            .as_micros();
-        let mut path = self.base_dir.clone();
-        path.push(format!("{}{}.data", SSTABLE_FILE_PREFIX, time));
-
-        Ok(path)
-    }
-}
-
-impl Clone for DatabaseConfig {
+impl Clone for DatabaseContext {
     fn clone(&self) -> Self {
         Self {
-            base_dir: self.base_dir.clone(),
+            sstable_namer: self.sstable_namer.clone(),
             max_memory_bytes: self.max_memory_bytes.clone(),
             compactor_factory: self.compactor_factory.clone(),
             metrics: self.metrics.clone(),
@@ -53,11 +39,11 @@ impl Clone for DatabaseConfig {
     }
 }
 
-impl Default for DatabaseConfig {
+impl Default for DatabaseContext {
     fn default() -> Self {
         Self {
-            base_dir: PathBuf::from("/tmp"),
-            max_memory_bytes: 1024 * 1000 * 10, // 10MB
+            sstable_namer: SSTableNamer::default(),
+            max_memory_bytes: 1024 * 1000, // 10MB
             compactor_factory: Box::new(SimpleCompactorFactory::default()),
             metrics: Arc::new(DatabaseMetrics::default()),
         }
@@ -65,14 +51,14 @@ impl Default for DatabaseConfig {
 }
 
 pub struct Database {
-    config: DatabaseConfig,
+    config: DatabaseContext,
     memtable: Memtable,
     disk_sstables: BTreeMap<PathBuf, DiskSSTable>,
     compactor_evt_tx: SyncSender<CompactorCommand>,
 }
 
 impl Database {
-    pub fn start(config: DatabaseConfig) -> Arc<Mutex<Self>> {
+    pub fn start(config: DatabaseContext) -> Arc<Mutex<Self>> {
         let (compactor_evt_tx, compactor_evt_rx) = sync_channel(1);
         let db = Self::new(config.clone(), compactor_evt_tx);
         let db = Arc::new(Mutex::new(db));
@@ -99,7 +85,7 @@ impl Database {
         db
     }
 
-    fn new(config: DatabaseConfig, compactor_evt_tx: SyncSender<CompactorCommand>) -> Database {
+    fn new(config: DatabaseContext, compactor_evt_tx: SyncSender<CompactorCommand>) -> Database {
         Database {
             config,
             compactor_evt_tx,
@@ -124,12 +110,16 @@ impl Database {
     ///
     /// Flush memtable to disk and add the new disktable to our stack of disktables.
     ///
-    fn flush_to_disk(&mut self) -> Result<()> {
+    pub fn flush_to_disk(&mut self) -> Result<()> {
         // make path
-        let mut path = self.config.sstable_path()?;
+        let path = self.config.sstable_namer.sstable_path()?;
+        log::debug!("Attempt flush of memtable to: {:?}", path);
 
         let memory_sstable = std::mem::take(&mut self.memtable);
         let size = memory_sstable.as_ref().size()?;
+        if size == 0 {
+            return Ok(());
+        }
         let disk_table = DiskSSTable::convert_mem(path.clone(), memory_sstable)?;
         // update compactor
         self.compactor_evt_tx
@@ -140,6 +130,7 @@ impl Database {
             .flushed_bytes
             .fetch_add(size, Ordering::Relaxed);
 
+        log::info!("Flushed memtable to: {:?}", path);
         Ok(())
     }
 
@@ -201,10 +192,10 @@ mod test {
     fn flushes_data_to_disk_when_mem_size() {
         let (compactor_evt_tx, compactor_evt_rx) = sync_channel(1);
         let metrics = Arc::new(DatabaseMetrics::default());
-        let config = DatabaseConfig {
+        let config = DatabaseContext {
             max_memory_bytes: 30,
             metrics: Arc::clone(&metrics),
-            ..DatabaseConfig::default()
+            ..DatabaseContext::default()
         };
         let mut engine = Database::new(config, compactor_evt_tx);
         engine.put(b"key1".to_vec(), b"value1".to_vec()).unwrap();

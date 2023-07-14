@@ -1,4 +1,4 @@
-use super::{database::DatabaseConfig, CompactorCommand};
+use super::{CompactorCommand, SSTableNamer};
 use crate::{
     error::*,
     sstable::{DiskSSTable, SortedDiskSSTableKeyValueIterator},
@@ -22,7 +22,7 @@ pub trait CompactorFactory: Send {
 ///
 #[derive(Default)]
 struct SimpleCompactorState {
-    config: DatabaseConfig,
+    config: SimpleCompactorConfig,
     tracked_sstables: HashMap<PathBuf, DiskSSTable>,
 }
 
@@ -49,7 +49,7 @@ impl SimpleCompactorState {
                 )))
             }
         });
-        let path = self.config.sstable_path()?;
+        let path = self.config.namer.sstable_path()?;
         let new_ss_table = DiskSSTable::convert_from_iter(path, key_it, value_it)?;
         Ok((
             to_merge.into_iter().map(|table| table.path()).collect(),
@@ -58,14 +58,18 @@ impl SimpleCompactorState {
     }
 }
 
-#[derive(Clone, Copy)]
-struct SimpleCompactorConfig {
+#[derive(Clone)]
+pub struct SimpleCompactorConfig {
     max_ss_tables: usize,
+    namer: SSTableNamer,
 }
 
 impl Default for SimpleCompactorConfig {
     fn default() -> Self {
-        Self { max_ss_tables: 2 }
+        Self {
+            max_ss_tables: 2,
+            namer: SSTableNamer::default(),
+        }
     }
 }
 
@@ -77,7 +81,7 @@ pub struct SimpleCompactorFactory {
 impl CompactorFactory for SimpleCompactorFactory {
     fn clone(&self) -> Box<dyn CompactorFactory> {
         Box::new(Self {
-            config: self.config,
+            config: self.config.clone(),
         })
     }
     fn start(
@@ -85,8 +89,11 @@ impl CompactorFactory for SimpleCompactorFactory {
         compactor_evt_rx: Receiver<CompactorCommand>,
     ) -> (Receiver<CompactorCommand>, JoinHandle<Result<()>>) {
         let (tx, rx) = sync_channel(1);
-        let mut state = SimpleCompactorState::default();
-        let config = self.config;
+        let mut state = SimpleCompactorState {
+            config: self.config.clone(),
+            ..Default::default()
+        };
+        let config = self.config.clone();
         (
             rx,
             spawn(move || {
