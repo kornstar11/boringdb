@@ -11,9 +11,7 @@ use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::Arc;
 use std::thread::{spawn, JoinHandle};
 
-static ERRORMSG: &str = "Unknown command";
-
-static ERROR_FRAME: Lazy<Frame> = Lazy::new(|| Frame::Error(ERRORMSG.into()));
+static UNKNOWN_RESP: Lazy<Frame> = Lazy::new(|| Frame::Error("Unknown command".into()));
 
 static OK_FRAME: Lazy<Frame> = Lazy::new(|| Frame::BulkString("OK".into()));
 
@@ -57,7 +55,7 @@ impl ServerState {
                                         return OK_FRAME.clone();
                                     }
                                     Err(e) => {
-                                        log::warn!("Client error: {}", e.to_string());
+                                        log::warn!("DB DEL error: {}", e.to_string());
                                         return Frame::Error(e.to_string().into());
                                     }
                                 }
@@ -73,13 +71,13 @@ impl ServerState {
                                         return Frame::Null;
                                     }
                                     Err(e) => {
-                                        log::warn!("Client error: {}", e.to_string());
+                                        log::warn!("DB GET Error: {}", e.to_string());
                                         return Frame::Error(e.to_string().into());
                                     }
                                 }
                             }
                         }
-                        b"PUT" => {
+                        b"SET" => {
                             if let [Frame::BulkString(key_bytes), Frame::BulkString(value_bytes)] =
                                 args
                             {
@@ -94,6 +92,22 @@ impl ServerState {
                                 }
                             }
                         }
+                        b"FLUSHALL" => {
+                            match self.db.lock().flush_to_disk() {
+                                Ok(()) => {
+                                    return OK_FRAME.clone();
+                                }
+                                Err(e) => {
+                                    log::warn!("Client error durring put: {}", e.to_string());
+                                    return Frame::Error(e.to_string().into());
+                                }
+                            }
+                        }
+                        // b"CONFIG" => {
+                        //     if let [Frame::BulkString(_get_set), Frame::BulkString(key)] = args {
+                        //         return Frame::Array(vec![Frame::BulkString(key.clone()), Frame::BulkString("3600 1 300 100 60 10000".into())]);
+                        //     }
+                        // }
                         _ => {}
                     }
                 }
@@ -101,7 +115,7 @@ impl ServerState {
             _ => {}
         };
 
-        ERROR_FRAME.clone()
+        UNKNOWN_RESP.clone()
     }
 }
 
@@ -122,19 +136,6 @@ impl ServerFactory {
                 if let Err(_) = cb.send(state.decode_state(frame)) {
                     break;
                 }
-
-                // DatabaseCommands::Get { key, cb } => {
-                //     if let Err(_) = cb.send(state.db.lock().get(key.as_ref())) {
-                //         log::warn!("Callback dead.");
-                //         return;
-                //     }
-                // },
-                // DatabaseCommands::Put { key, value, cb } => {
-                //     if let Err(_) = cb.send(state.db.lock().put(key, value)) {
-                //         log::warn!("Callback dead.");
-                //         return;
-                //     }
-                // }
             }
             log::info!("Stopping network thread (db)");
         });

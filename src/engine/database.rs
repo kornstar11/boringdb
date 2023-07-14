@@ -110,12 +110,16 @@ impl Database {
     ///
     /// Flush memtable to disk and add the new disktable to our stack of disktables.
     ///
-    fn flush_to_disk(&mut self) -> Result<()> {
+    pub fn flush_to_disk(&mut self) -> Result<()> {
         // make path
-        let mut path = self.config.sstable_namer.sstable_path()?;
+        let path = self.config.sstable_namer.sstable_path()?;
+        log::debug!("Attempt flush of memtable to: {:?}", path);
 
         let memory_sstable = std::mem::take(&mut self.memtable);
         let size = memory_sstable.as_ref().size()?;
+        if size == 0 {
+            return Ok(());
+        }
         let disk_table = DiskSSTable::convert_mem(path.clone(), memory_sstable)?;
         // update compactor
         self.compactor_evt_tx
@@ -126,6 +130,7 @@ impl Database {
             .flushed_bytes
             .fetch_add(size, Ordering::Relaxed);
 
+        log::info!("Flushed memtable to: {:?}", path);
         Ok(())
     }
 
