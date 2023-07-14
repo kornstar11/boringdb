@@ -93,10 +93,11 @@ impl CompactorFactory for SimpleCompactorFactory {
             config: self.config.clone(),
             ..Default::default()
         };
+        let thread_bldr = std::thread::Builder::new().name("SimpleCompaction".into());
         let config = self.config.clone();
         (
             rx,
-            spawn(move || {
+            thread_bldr.spawn(move || {
                 while let Ok(evt) = compactor_evt_rx.recv() {
                     match evt {
                         CompactorCommand::NewSSTable(table) => {
@@ -121,7 +122,7 @@ impl CompactorFactory for SimpleCompactorFactory {
                     }
                 }
                 Ok(())
-            }),
+            }).unwrap(),
         )
     }
 }

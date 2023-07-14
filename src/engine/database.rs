@@ -1,9 +1,10 @@
+use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::Arc;
-use std::thread::spawn;
+use std::time::Duration;
 use std::{collections::BTreeMap, path::PathBuf};
 
 use crate::{error::*, sstable::*};
@@ -11,15 +12,55 @@ use crate::{error::*, sstable::*};
 use super::compaction::{CompactorFactory, SimpleCompactorFactory};
 use super::{CompactorCommand, SSTableNamer, SSTABLE_FILE_PREFIX};
 
+static DB_METRICS: Lazy<Arc<DatabaseMetrics>> = Lazy::new(|| {
+    let metrics = Arc::new(DatabaseMetrics::default());
+    let inner_metrics = Arc::clone(&metrics);
+    std::thread::Builder::new().name("Metrics".into()).spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+            log::info!("{:?}", inner_metrics);
+        }
+    }).unwrap();
+    metrics
+});
+
 ///
 /// Engine handle managment of the SSTables. It is responsible for converting a memory SSTable into a disk SSTable.
 /// Also handled are management of Bloomfilters for the DiskSSTables.
 ///
 /// TODO need a WAL to make memtable safe...
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct DatabaseMetrics {
     flushed_bytes: AtomicUsize,
+    fetched_from_memory: AtomicUsize,
+    fetched_from_disk: AtomicUsize,
+    flushed_to_disk: AtomicUsize,
+}
+
+impl DatabaseMetrics {
+    pub fn new() -> Arc<Self> {
+        Arc::clone(&DB_METRICS)
+    }
+    fn add_flushed_bytes(self: &Arc<Self>, additional: usize) {
+        Arc::clone(self)
+            .flushed_bytes
+            .fetch_add(additional, Ordering::Relaxed);
+        Arc::clone(self)
+            .flushed_to_disk
+            .fetch_add(1, Ordering::Relaxed);
+    }
+    fn incr_fetched_from_memory(self: &Arc<Self>, additional: usize) {
+        Arc::clone(self)
+            .fetched_from_memory
+            .fetch_add(additional, Ordering::Relaxed);
+    }
+    fn incr_fetched_from_disk(self: &Arc<Self>, additional: usize) {
+        Arc::clone(self)
+            .fetched_from_disk
+            .fetch_add(additional, Ordering::Relaxed);
+    }
+    
 }
 pub struct DatabaseContext {
     pub sstable_namer: SSTableNamer,
@@ -45,7 +86,7 @@ impl Default for DatabaseContext {
             sstable_namer: SSTableNamer::default(),
             max_memory_bytes: 1024 * 1000, // 1MB
             compactor_factory: Box::new(SimpleCompactorFactory::default()),
-            metrics: Arc::new(DatabaseMetrics::default()),
+            metrics: DatabaseMetrics::new(),
         }
     }
 }
@@ -65,8 +106,8 @@ impl Database {
         let event_db = Arc::clone(&db);
 
         let (compactor_evt_rx, _join) = config.compactor_factory.start(compactor_evt_rx);
-
-        let _evt_handler = spawn(move || {
+        let thread_builder = std::thread::Builder::new().name("Database".into());
+        let _evt_handler = thread_builder.spawn(move || {
             while let Ok(evt) = compactor_evt_rx.recv() {
                 let mut db = event_db.lock();
                 match evt {
@@ -80,7 +121,7 @@ impl Database {
                     }
                 }
             }
-        });
+        }).unwrap();
 
         db
     }
@@ -127,8 +168,7 @@ impl Database {
             .map_err(|_| Error::SendError)?;
         self.add_sstable(disk_table);
         Arc::clone(&self.config.metrics)
-            .flushed_bytes
-            .fetch_add(size, Ordering::Relaxed);
+            .add_flushed_bytes(size);
 
         log::info!("Flushed memtable to: {:?}", path);
         Ok(())
@@ -163,9 +203,11 @@ impl Database {
 
     pub fn get(&self, k: &[u8]) -> Result<Option<Vec<u8>>> {
         if let Some(v) = self.memtable.as_ref().get(k)? {
+            Arc::clone(&self.config.metrics).incr_fetched_from_memory(1);
             log::trace!("Fetched from memory");
             return Ok(Some(v.to_vec()));
         }
+        Arc::clone(&self.config.metrics).incr_fetched_from_disk(1);
 
         return self.lookup_disk(k);
     }

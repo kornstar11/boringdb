@@ -1,6 +1,6 @@
 use crate::error::*;
 use crate::{Database, DatabaseContext};
-use bytes::{Bytes, BytesMut, Buf};
+use bytes::{Bytes, BytesMut};
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use redis_protocol::resp2::prelude::*;
@@ -8,7 +8,7 @@ use std::io::prelude::*;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::Arc;
-use std::thread::{spawn, JoinHandle};
+use std::thread::spawn;
 
 static UNKNOWN_RESP: Lazy<Frame> = Lazy::new(|| Frame::Error("Unknown command".into()));
 
