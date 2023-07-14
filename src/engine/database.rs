@@ -163,6 +163,7 @@ impl Database {
 
     pub fn get(&self, k: &[u8]) -> Result<Option<Vec<u8>>> {
         if let Some(v) = self.memtable.as_ref().get(k)? {
+            log::trace!("Fetched from memory");
             return Ok(Some(v.to_vec()));
         }
 
