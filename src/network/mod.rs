@@ -1,10 +1,9 @@
 use crate::error::*;
 use crate::{Database, DatabaseContext};
-use bytes::{Bytes, BytesMut};
+use bytes::{Bytes, BytesMut, Buf};
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use redis_protocol::resp2::prelude::*;
-use redis_protocol::resp3::encode::complete::encode;
 use std::io::prelude::*;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
@@ -170,17 +169,22 @@ impl ServerFactory {
     }
 
     fn handler(mut stream: TcpStream, tx_commands: SyncSender<FrameWithCallback>) -> Result<()> {
-        let cap = 1024;
+        let cap = 102;
         let mut outer_buf = BytesMut::new();
-        let mut buf = BytesMut::zeroed(cap); //[0 as u8; 1024];
+        let mut buf = vec![0 as u8; 1024]; 
         let mut send_buf = BytesMut::zeroed(cap); //[0 as u8; 1024];
         while let Ok(bytes_read) = stream.read(&mut buf) {
+            log::trace!("Bytes read == {}", bytes_read);
             if bytes_read == 0 {
                 return Ok(());
             }
+            outer_buf.extend_from_slice(&buf[0..bytes_read]);
+
             //let bytes = buf.clone().freeze();
-            match decode_mut(&mut buf) {
-                Ok(Some((frame, _read, _consumed))) => {
+            match decode_mut(&mut outer_buf) {
+                Ok(Some((frame, read, consumed))) => {
+                    //log::trace!("framer Read: {} {}", read, outer_buf.len());
+                    //outer_buf.advance(read - 1);
                     let (frame_with_cb, cb) = FrameWithCallback::new(frame);
                     if let Err(_) = tx_commands.send(frame_with_cb) {
                         log::debug!("Recv loop closed.");
@@ -195,9 +199,10 @@ impl ServerFactory {
                         stream.write(&send_buf[0..encode_len])?;
                     }
                 }
-                Ok(None) if outer_buf.len() <= 1000_000 => {
+                Ok(None) if outer_buf.len() <= 1_000_000 => {
                     // not enough bytes so save it off
-                    outer_buf.extend_from_slice(buf.as_ref())
+                    log::trace!("Buffering...");
+                    // outer_buf.extend_from_slice(buf.as_ref())
                 }
                 Ok(None) => {
                     return Err(Error::Other(String::from(
@@ -205,6 +210,7 @@ impl ServerFactory {
                     )));
                 }
                 Err(e) => {
+                    log::error!("While reading, {:?}", e);
                     return Err(Error::Redis(e));
                 }
             }
