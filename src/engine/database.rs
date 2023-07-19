@@ -15,12 +15,13 @@ use super::{CompactorCommand, SSTableNamer, SSTABLE_FILE_PREFIX};
 static DB_METRICS: Lazy<Arc<DatabaseMetrics>> = Lazy::new(|| {
     let metrics = Arc::new(DatabaseMetrics::default());
     let inner_metrics = Arc::clone(&metrics);
-    std::thread::Builder::new().name("Metrics".into()).spawn(move || {
-        loop {
+    std::thread::Builder::new()
+        .name("Metrics".into())
+        .spawn(move || loop {
             std::thread::sleep(Duration::from_secs(1));
             log::info!("{:?}", inner_metrics);
-        }
-    }).unwrap();
+        })
+        .unwrap();
     metrics
 });
 
@@ -60,7 +61,6 @@ impl DatabaseMetrics {
             .fetched_from_disk
             .fetch_add(additional, Ordering::Relaxed);
     }
-    
 }
 pub struct DatabaseContext {
     pub sstable_namer: SSTableNamer,
@@ -107,21 +107,23 @@ impl Database {
 
         let (compactor_evt_rx, _join) = config.compactor_factory.start(compactor_evt_rx);
         let thread_builder = std::thread::Builder::new().name("Database".into());
-        let _evt_handler = thread_builder.spawn(move || {
-            while let Ok(evt) = compactor_evt_rx.recv() {
-                let mut db = event_db.lock();
-                match evt {
-                    CompactorCommand::NewSSTable(new) => {
-                        db.add_sstable(new);
-                    }
-                    CompactorCommand::RemoveSSTables(to_drops) => {
-                        for to_drop in to_drops {
-                            db.remove_sstable(to_drop);
+        let _evt_handler = thread_builder
+            .spawn(move || {
+                while let Ok(evt) = compactor_evt_rx.recv() {
+                    let mut db = event_db.lock();
+                    match evt {
+                        CompactorCommand::NewSSTable(new) => {
+                            db.add_sstable(new);
+                        }
+                        CompactorCommand::RemoveSSTables(to_drops) => {
+                            for to_drop in to_drops {
+                                db.remove_sstable(to_drop);
+                            }
                         }
                     }
                 }
-            }
-        }).unwrap();
+            })
+            .unwrap();
 
         db
     }
@@ -167,8 +169,7 @@ impl Database {
             .send(CompactorCommand::NewSSTable(disk_table.clone()))
             .map_err(|_| Error::SendError)?;
         self.add_sstable(disk_table);
-        Arc::clone(&self.config.metrics)
-            .add_flushed_bytes(size);
+        Arc::clone(&self.config.metrics).add_flushed_bytes(size);
 
         log::info!("Flushed memtable to: {:?}", path);
         Ok(())

@@ -1,6 +1,6 @@
 use crate::error::*;
 use crate::{Database, DatabaseContext};
-use bytes::{Bytes, BytesMut, Buf};
+use bytes::{Bytes, BytesMut};
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use redis_protocol::resp2::prelude::*;
@@ -91,17 +91,15 @@ impl ServerState {
                                 }
                             }
                         }
-                        b"FLUSHALL" => {
-                            match self.db.lock().flush_to_disk() {
-                                Ok(()) => {
-                                    return OK_FRAME.clone();
-                                }
-                                Err(e) => {
-                                    log::warn!("Client error durring put: {}", e.to_string());
-                                    return Frame::Error(e.to_string().into());
-                                }
+                        b"FLUSHALL" => match self.db.lock().flush_to_disk() {
+                            Ok(()) => {
+                                return OK_FRAME.clone();
                             }
-                        }
+                            Err(e) => {
+                                log::warn!("Client error durring put: {}", e.to_string());
+                                return Frame::Error(e.to_string().into());
+                            }
+                        },
                         // b"CONFIG" => {
                         //     if let [Frame::BulkString(_get_set), Frame::BulkString(key)] = args {
                         //         return Frame::Array(vec![Frame::BulkString(key.clone()), Frame::BulkString("3600 1 300 100 60 10000".into())]);
@@ -129,7 +127,7 @@ impl ServerFactory {
         let (tx, rx) = sync_channel::<FrameWithCallback>(self.outstanding_requests);
 
         let forwarder_thread = spawn(move || {
-            let mut state = ServerState::new();
+            let state = ServerState::new();
             while let Ok(cmd) = rx.recv() {
                 let (frame, cb) = cmd.split();
                 if let Err(_) = cb.send(state.decode_state(frame)) {
@@ -146,10 +144,13 @@ impl ServerFactory {
                     log::info!("Accepting connections");
                     while let Ok((stream, remote)) = tcp.accept() {
                         log::info!("Accepting connection from {:?}", remote);
-                        if let Err(e) = Self::handler(stream, tx.clone()) {
-                            log::warn!("Client error: {:?}", e);
-                        }
-                        log::info!("Closed connection.");
+                        let tx = tx.clone();
+                        spawn(move || {
+                            if let Err(e) = Self::handler(stream, tx.clone()) {
+                                log::warn!("Client error: {:?}", e);
+                            }
+                            log::info!("Closed connection.");
+                        });
                     }
                 }
                 Err(e) => {
@@ -172,7 +173,7 @@ impl ServerFactory {
         let cap = 1024;
         let mut pos = 0;
         let mut outer_buf = BytesMut::zeroed(cap);
-        //let mut buf = vec![0 as u8; 1024]; 
+        //let mut buf = vec![0 as u8; 1024];
         let mut send_buf = BytesMut::zeroed(cap); //[0 as u8; 1024];
         while let Ok(bytes_read) = stream.read(&mut outer_buf[pos..]) {
             //log::trace!("Bytes read == {}", bytes_read);
@@ -188,7 +189,9 @@ impl ServerFactory {
                     //outer_buf.resize(cap, 0);
                     //if outer_buf.len() == 0 {
                     outer_buf.reserve(cap);
-                    unsafe {outer_buf.set_len(cap);}
+                    unsafe {
+                        outer_buf.set_len(cap);
+                    }
                     //}
                     pos = 0;
 
@@ -199,10 +202,8 @@ impl ServerFactory {
                     }
                     if let Ok(resp) = cb.recv() {
                         send_buf.clear();
-                        //log::debug!("Sending back: {:?}", resp);
                         let encode_len =
                             encode_bytes(&mut send_buf, &resp).map_err(Error::Redis)?;
-                        //log::debug!("Encoded bytes to send: {}", encode_len);
                         stream.write(&send_buf[0..encode_len])?;
                     }
                 }

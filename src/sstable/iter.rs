@@ -79,7 +79,9 @@ impl<O: Send, M: Mapper<O>> DiskSSTableIterator<O, M> {
     fn get_next(&mut self) -> Result<Option<O>> {
         let table = Arc::clone(&self.table);
         let mut table = table.lock();
-        let index = self.index.get_or_insert_with(|| table.read_key_index().map(|idx| idx.as_ref().clone()));
+        let index = self
+            .index
+            .get_or_insert_with(|| table.read_key_index().map(|idx| idx.as_ref().clone()));
 
         match index {
             Ok((key_idxs, value_idxs)) => {
@@ -120,6 +122,7 @@ type KeyIdxIt = DiskSSTableIterator<(Vec<u8>, (ValueIndex, ValueIndex)), KeyInde
 ///
 /// Iterator takes multiple Iterators from multiple sstables and returns a tuple:
 /// (sstable_index, KeyIndex), (sstable_index, ValueIndex)
+/// the `sstable_index`, is the index of the iters vec, that the caller should use to look up their key.
 pub struct SortedDiskSSTableKeyValueIterator {
     iters: Vec<Peekable<KeyIdxIt>>,
     order: Ordering,

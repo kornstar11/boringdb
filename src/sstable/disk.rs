@@ -87,6 +87,37 @@ impl Value {
         }
     }
 }
+
+pub struct InternalDiskSSTableBuilder {
+    file: File
+}
+
+impl InternalDiskSSTableBuilder {
+    pub fn new(file: File) -> Self{
+        Self {file}
+    }
+    pub fn set_values_it(mut self, values: impl Iterator<Item = Result<ValueRef>>) -> Result<InternalDiskSSTableBuilderHasValues> {
+        let mut values_to_position = ValuesToPositions::default();
+        InternalDiskSSTable::encode_values(values, &mut self.file, &mut values_to_position)?;
+        Ok(InternalDiskSSTableBuilderHasValues{file: self.file, values_to_position})
+    }
+}
+
+pub struct InternalDiskSSTableBuilderHasValues{
+    file: File,
+    values_to_position: ValuesToPositions,
+}
+
+impl InternalDiskSSTableBuilderHasValues {
+    pub fn finish(mut self, keys: impl Iterator<Item = Vec<u8>>,) -> Result<File> {
+        InternalDiskSSTable::encode_keys(keys, &mut self.file, self.values_to_position)?;
+        self.file.sync_all()?;
+        Ok(self.file)
+    }
+    
+}
+
+
 type KeyValueIdxPair = (Vec<ValueIndex>, Vec<ValueIndex>);
 ///
 /// Immutable SSTable stored on Disk. The general file layout is as follows:
@@ -104,21 +135,25 @@ type KeyValueIdxPair = (Vec<ValueIndex>, Vec<ValueIndex>);
 /// that we can load the keys quicker when comparing sstables.
 pub struct InternalDiskSSTable {
     file: File,
-    key_value_idx_pair: Option<Arc<KeyValueIdxPair>>
+    key_value_idx_pair: Option<Arc<KeyValueIdxPair>>,
 }
 
 impl InternalDiskSSTable {
     pub fn encode_it(
         keys: impl Iterator<Item = Vec<u8>>,
         values: impl Iterator<Item = Result<ValueRef>>,
-        mut file: File,
+        file: File,
     ) -> Result<InternalDiskSSTable> {
-        let mut values_to_position = ValuesToPositions::default();
-        Self::encode_values(values, &mut file, &mut values_to_position)?;
-        Self::encode_keys(keys, &mut file, values_to_position)?;
-        file.sync_all()?;
+        let bldr = InternalDiskSSTableBuilder::new(file);
+        let file = bldr
+            .set_values_it(values)?
+            .finish(keys)?;
 
-        Ok(InternalDiskSSTable { file, key_value_idx_pair: None })
+
+        Ok(InternalDiskSSTable {
+            file,
+            key_value_idx_pair: None,
+        })
     }
 
     pub fn encode_inmemory_sstable(
@@ -152,7 +187,7 @@ impl InternalDiskSSTable {
     /// Returns the positions of the sorted keys and their length
     pub fn read_key_index(&mut self) -> Result<Arc<KeyValueIdxPair>> {
         if let Some(ref key_value_idx_pair) = self.key_value_idx_pair {
-            return Ok(Arc::clone(key_value_idx_pair))
+            return Ok(Arc::clone(key_value_idx_pair));
         }
         let number_of_keys = self.read_number_of_keys()?;
         let mut key_idxs = vec![];
@@ -322,7 +357,10 @@ impl DiskSSTable {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<DiskSSTable> {
         let path = path.as_ref().to_path_buf();
         let file = File::open(path.clone())?;
-        let inner = InternalDiskSSTable { file, key_value_idx_pair: None };
+        let inner = InternalDiskSSTable {
+            file,
+            key_value_idx_pair: None,
+        };
         Ok(DiskSSTable {
             path,
             inner: Arc::new(Mutex::new(inner)),
@@ -381,6 +419,8 @@ impl SSTable<Vec<u8>> for DiskSSTable {
         self.inner.lock().read_number_of_keys()
     }
 }
+
+
 
 #[cfg(test)]
 mod test {
