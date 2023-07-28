@@ -1,6 +1,6 @@
 use crate::error::*;
 use crate::{Database, DatabaseContext};
-use bytes::{Bytes, BytesMut, Buf};
+use bytes::{Bytes, BytesMut};
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use redis_protocol::resp2::prelude::*;
@@ -8,7 +8,7 @@ use std::io::prelude::*;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::Arc;
-use std::thread::{spawn, JoinHandle};
+use std::thread::spawn;
 
 static UNKNOWN_RESP: Lazy<Frame> = Lazy::new(|| Frame::Error("Unknown command".into()));
 
@@ -91,17 +91,15 @@ impl ServerState {
                                 }
                             }
                         }
-                        b"FLUSHALL" => {
-                            match self.db.lock().flush_to_disk() {
-                                Ok(()) => {
-                                    return OK_FRAME.clone();
-                                }
-                                Err(e) => {
-                                    log::warn!("Client error durring put: {}", e.to_string());
-                                    return Frame::Error(e.to_string().into());
-                                }
+                        b"FLUSHALL" => match self.db.lock().flush_to_disk() {
+                            Ok(()) => {
+                                return OK_FRAME.clone();
                             }
-                        }
+                            Err(e) => {
+                                log::warn!("Client error durring put: {}", e.to_string());
+                                return Frame::Error(e.to_string().into());
+                            }
+                        },
                         // b"CONFIG" => {
                         //     if let [Frame::BulkString(_get_set), Frame::BulkString(key)] = args {
                         //         return Frame::Array(vec![Frame::BulkString(key.clone()), Frame::BulkString("3600 1 300 100 60 10000".into())]);
@@ -129,7 +127,7 @@ impl ServerFactory {
         let (tx, rx) = sync_channel::<FrameWithCallback>(self.outstanding_requests);
 
         let forwarder_thread = spawn(move || {
-            let mut state = ServerState::new();
+            let state = ServerState::new();
             while let Ok(cmd) = rx.recv() {
                 let (frame, cb) = cmd.split();
                 if let Err(_) = cb.send(state.decode_state(frame)) {
@@ -146,10 +144,13 @@ impl ServerFactory {
                     log::info!("Accepting connections");
                     while let Ok((stream, remote)) = tcp.accept() {
                         log::info!("Accepting connection from {:?}", remote);
-                        if let Err(e) = Self::handler(stream, tx.clone()) {
-                            log::warn!("Client error: {:?}", e);
-                        }
-                        log::info!("Closed connection.");
+                        let tx = tx.clone();
+                        spawn(move || {
+                            if let Err(e) = Self::handler(stream, tx.clone()) {
+                                log::warn!("Client error: {:?}", e);
+                            }
+                            log::info!("Closed connection.");
+                        });
                     }
                 }
                 Err(e) => {
@@ -169,22 +170,31 @@ impl ServerFactory {
     }
 
     fn handler(mut stream: TcpStream, tx_commands: SyncSender<FrameWithCallback>) -> Result<()> {
-        let cap = 102;
-        let mut outer_buf = BytesMut::new();
-        let mut buf = vec![0 as u8; 1024]; 
+        let cap = 1024;
+        let mut pos = 0;
+        let mut outer_buf = BytesMut::zeroed(cap);
+        //let mut buf = vec![0 as u8; 1024];
         let mut send_buf = BytesMut::zeroed(cap); //[0 as u8; 1024];
-        while let Ok(bytes_read) = stream.read(&mut buf) {
-            log::trace!("Bytes read == {}", bytes_read);
+        while let Ok(bytes_read) = stream.read(&mut outer_buf[pos..]) {
+            //log::trace!("Bytes read == {}", bytes_read);
             if bytes_read == 0 {
                 return Ok(());
             }
-            outer_buf.extend_from_slice(&buf[0..bytes_read]);
+            pos += bytes_read;
+            //outer_buf.extend_from_slice(&buf[0..bytes_read]);
 
             //let bytes = buf.clone().freeze();
             match decode_mut(&mut outer_buf) {
-                Ok(Some((frame, read, consumed))) => {
-                    //log::trace!("framer Read: {} {}", read, outer_buf.len());
-                    //outer_buf.advance(read - 1);
+                Ok(Some((frame, _read, _consumed))) => {
+                    //outer_buf.resize(cap, 0);
+                    //if outer_buf.len() == 0 {
+                    outer_buf.reserve(cap);
+                    unsafe {
+                        outer_buf.set_len(cap);
+                    }
+                    //}
+                    pos = 0;
+
                     let (frame_with_cb, cb) = FrameWithCallback::new(frame);
                     if let Err(_) = tx_commands.send(frame_with_cb) {
                         log::debug!("Recv loop closed.");
@@ -192,16 +202,16 @@ impl ServerFactory {
                     }
                     if let Ok(resp) = cb.recv() {
                         send_buf.clear();
-                        log::debug!("Sending back: {:?}", resp);
                         let encode_len =
                             encode_bytes(&mut send_buf, &resp).map_err(Error::Redis)?;
-                        log::debug!("Encoded bytes to send: {}", encode_len);
                         stream.write(&send_buf[0..encode_len])?;
                     }
                 }
                 Ok(None) if outer_buf.len() <= 1_000_000 => {
+                    //outer_buf.advance(bytes_read);
                     // not enough bytes so save it off
-                    log::trace!("Buffering...");
+                    outer_buf.resize(outer_buf.len() + cap, 0);
+                    //log::trace!("Buffering...");
                     // outer_buf.extend_from_slice(buf.as_ref())
                 }
                 Ok(None) => {
