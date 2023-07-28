@@ -1,22 +1,14 @@
-use super::{CompactorCommand, SSTableNamer};
+use super::{CompactorCommand, CompactorFactory};
 use crate::{
     error::*,
-    sstable::{DiskSSTable, SortedDiskSSTableKeyValueIterator},
+    sstable::{DiskSSTable, SortedDiskSSTableKeyValueIterator}, SSTableNamer,
 };
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet},
     path::PathBuf,
     sync::mpsc::{sync_channel, Receiver},
-    thread::{spawn, JoinHandle}, rc::Rc,
+    thread::{JoinHandle}
 };
-
-pub trait CompactorFactory: Send {
-    fn start(
-        &self,
-        compactor_evt_rx: Receiver<CompactorCommand>,
-    ) -> (Receiver<CompactorCommand>, JoinHandle<Result<()>>);
-    fn clone(&self) -> Box<dyn CompactorFactory>;
-}
 
 /// Just merges sstables when there are X amount of sstables
 ///
