@@ -109,16 +109,36 @@ pub struct InternalDiskSSTableBuilderHasValues{
 }
 
 impl InternalDiskSSTableBuilderHasValues {
-    pub fn finish(mut self, keys: impl Iterator<Item = Vec<u8>>,) -> Result<File> {
-        InternalDiskSSTable::encode_keys(keys, &mut self.file, self.values_to_position)?;
+    pub fn finish(mut self, keys: impl Iterator<Item = Vec<u8>>,) -> Result<(File, KeyMetadata)> {
+        let metadata = InternalDiskSSTable::encode_keys(keys, &mut self.file, self.values_to_position)?;
         self.file.sync_all()?;
-        Ok(self.file)
+        Ok((self.file, metadata))
     }
     
 }
 
 
 type KeyValueIdxPair = (Vec<ValueIndex>, Vec<ValueIndex>);
+
+#[derive(Clone, Debug, Default)]
+struct KeyMetadata {
+    low: Vec<u8>,
+    high: Vec<u8>
+}
+
+impl KeyMetadata {
+    fn update(&mut self, key: &Vec<u8>) {
+        if self.low.is_empty() {
+            self.low = key.clone();
+            self.high = key.clone();
+            return;
+        }
+
+        self.low = self.low.min(key.clone());
+        self.high = self.high.max(key.clone());
+    }
+    
+}
 ///
 /// Immutable SSTable stored on Disk. The general file layout is as follows:
 /// ```text
@@ -135,6 +155,7 @@ type KeyValueIdxPair = (Vec<ValueIndex>, Vec<ValueIndex>);
 /// that we can load the keys quicker when comparing sstables.
 pub struct InternalDiskSSTable {
     file: File,
+    key_metadata: KeyMetadata,
     key_value_idx_pair: Option<Arc<KeyValueIdxPair>>,
 }
 
@@ -145,13 +166,14 @@ impl InternalDiskSSTable {
         file: File,
     ) -> Result<InternalDiskSSTable> {
         let bldr = InternalDiskSSTableBuilder::new(file);
-        let file = bldr
+        let (file, key_metadata) = bldr
             .set_values_it(values)?
             .finish(keys)?;
 
 
         Ok(InternalDiskSSTable {
             file,
+            key_metadata,
             key_value_idx_pair: None,
         })
     }
@@ -271,12 +293,15 @@ impl InternalDiskSSTable {
         keys: impl Iterator<Item = Vec<u8>>,
         file: &mut File,
         values_to_position: ValuesToPositions,
-    ) -> Result<()> {
+    ) -> Result<KeyMetadata> {
+        let mut metadata = KeyMetadata::default();
         let (value_idxs, mut position) = values_to_position.split();
         // tracks the key index to position in the file
         let mut key_idxs = vec![];
         // write the key values to the file as well as the corresponding value index in the file.
         for key in keys {
+            metadata.update(&key);
+
             key_idxs.push(ValueIndex::new(position, key.len()));
             let mut buf = BytesMut::new();
             buf.put_slice(key.as_slice());
@@ -297,7 +322,7 @@ impl InternalDiskSSTable {
         buf.put_u64_le(keys_start_pos as u64);
         file.write_all(&buf)?;
         file.sync_all()?;
-        Ok(())
+        Ok(metadata)
     }
 
     fn encode_values(
@@ -335,6 +360,8 @@ impl DiskSSTable {
         Self::convert_from_iter(path, keys.into_iter(), values.into_iter().map(Ok))
     }
 
+    /// 
+    /// Consumes iterators for keys and values... it is assumed that the keys are sorted and the key at position x corisponds to the value at position x across the two iters
     pub fn convert_from_iter<P: AsRef<Path>>(
         path: P,
         keys: impl Iterator<Item = Vec<u8>>,
@@ -407,6 +434,13 @@ impl DiskSSTable {
     }
     pub fn iter_value(&self) -> DiskSSTableIterator<Value, ValueMapper> {
         DiskSSTableIterator::new(Arc::clone(&self.inner), ValueMapper {})
+    }
+
+    ///
+    /// Range (low, high)
+    
+    fn range(&self) -> (Vec<u8>, Vec<u8>) {
+
     }
 }
 

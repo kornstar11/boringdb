@@ -4,6 +4,7 @@ use crate::CompactorCommand;
 use crate::error::*;
 
 mod simple;
+mod level;
 pub use {simple::SimpleCompactorConfig, simple::SimpleCompactorFactory};
 
 pub trait CompactorFactory: Send {

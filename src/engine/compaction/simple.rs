@@ -7,7 +7,7 @@ use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
     sync::mpsc::{sync_channel, Receiver},
-    thread::{JoinHandle}
+    thread::JoinHandle
 };
 
 /// Just merges sstables when there are X amount of sstables
