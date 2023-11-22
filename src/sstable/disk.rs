@@ -133,11 +133,20 @@ impl KeyMetadata {
             self.high = key.clone();
             return;
         }
+        match key.cmp(&self.low) {
+            Ordering::Less => {
+                self.low = key.clone();
+            },
+            _ => {}
+        }
 
-        self.low = self.low.min(key.clone());
-        self.high = self.high.max(key.clone());
+        match key.cmp(&self.high) {
+            Ordering::Greater => {
+                self.high = key.clone();
+            },
+            _ => {}
+        }
     }
-    
 }
 ///
 /// Immutable SSTable stored on Disk. The general file layout is as follows:
@@ -386,6 +395,7 @@ impl DiskSSTable {
         let file = File::open(path.clone())?;
         let inner = InternalDiskSSTable {
             file,
+            key_metadata: KeyMetadata::default(),
             key_value_idx_pair: None,
         };
         Ok(DiskSSTable {
@@ -440,6 +450,8 @@ impl DiskSSTable {
     /// Range (low, high)
     
     fn range(&self) -> (Vec<u8>, Vec<u8>) {
+        let inner = self.inner.lock();
+        (inner.key_metadata.low.clone(), inner.key_metadata.high.clone())
 
     }
 }
