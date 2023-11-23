@@ -52,6 +52,7 @@ impl ValueRef {
 pub trait SSTable<G: AsRef<[u8]>> {
     fn get(&self, k: &[u8]) -> Result<Option<G>>;
     fn size(&self) -> Result<usize>;
+    fn range(&self) -> Option<(Vec<u8>, Vec<u8>)>;
 }
 
 pub trait MutSSTable {

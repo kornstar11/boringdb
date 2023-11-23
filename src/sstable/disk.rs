@@ -446,14 +446,7 @@ impl DiskSSTable {
         DiskSSTableIterator::new(Arc::clone(&self.inner), ValueMapper {})
     }
 
-    ///
-    /// Range (low, high)
-    
-    fn range(&self) -> (Vec<u8>, Vec<u8>) {
-        let inner = self.inner.lock();
-        (inner.key_metadata.low.clone(), inner.key_metadata.high.clone())
 
-    }
 }
 
 impl SSTable<Vec<u8>> for DiskSSTable {
@@ -463,6 +456,13 @@ impl SSTable<Vec<u8>> for DiskSSTable {
 
     fn size(&self) -> Result<usize> {
         self.inner.lock().read_number_of_keys()
+    }
+
+    ///
+    /// Range (low, high)
+    fn range(&self) -> Option<(Vec<u8>, Vec<u8>)> {
+        let inner = self.inner.lock();
+        Some((inner.key_metadata.low.clone(), inner.key_metadata.high.clone()))
     }
 }
 

@@ -53,6 +53,14 @@ impl<'a> SSTable<&'a [u8]> for &'a Memtable {
             Err(_) => None,
         })
     }
+
+    fn range(&self) -> Option<(Vec<u8>, Vec<u8>)> {
+        match (self.keys.first(), self.keys.last()) {
+            (Some(first), Some(last)) => Some((first.clone(), last.clone())),
+            _ => None,
+        }
+            
+    }
 }
 
 impl MutSSTable for Memtable {
