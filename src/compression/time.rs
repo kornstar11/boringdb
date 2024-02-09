@@ -79,7 +79,6 @@ impl BitReader {
         self.offset = 0;
         self.scratch = self.inner.get_u64();
     }
-    
 }
 
 // pub struct TimeCompressor {
