@@ -37,11 +37,9 @@ impl BitWriter {
     pub fn write(&mut self, mut to_write: u64, mut bits_to_write: usize) {
         let new_offset = self.offset + bits_to_write;
         // mask off to_write
-        println!("to_write1 {to_write:b}");
+        //println!("to_write1 {to_write:b}");
         let mask = !(u64::MAX << bits_to_write);
-        println!("mask {mask:b}");
         to_write = mask & to_write;
-        println!("to_write2{to_write:b}");
         if new_offset > U64_BITS as _ {
             let remaining = U64_BITS - self.offset; // 64 - 62 = 2
             let shift_right_pos = bits_to_write - remaining; //7 - 2 = 5
@@ -107,10 +105,9 @@ impl BitReader {
             self.rotate_scratch();
             bits_to_read -= remaining;
         }
-        let mask = !(u64::MAX >> (bits_to_read+ self.offset));
-        println!("read_mask {mask:b}");
-        acc |= (self.scratch & mask) >> U64_BITS - bits_to_read;
-        println!("read_acc {acc:b}");
+        let mask = !(u64::MAX >> bits_to_read);
+        acc |= (self.scratch & mask) >> U64_BITS - bits_to_read + 1;
+        self.scratch <<= bits_to_read;
         self.offset += 1;
         return acc;
     }
