@@ -2,21 +2,21 @@ use bytes::{BytesMut, BufMut, Buf, Bytes};
 
 // Time compressor uses the "delta of delta" ideas from Facebooks Gorrila paper
 // https://www.vldb.org/pvldb/vol8/p1816-teller.pdf
-use super::Compressor;
-use crate::error::*;
+// use super::Compressor;
+// use crate::error::*;
 
-// Range masks (4.1.1)
-// (value, bits used)
-const MAX_BITS_USED: u32 = 4;
-const R0: (u64, u32, u32) = (0b0 << u64::BITS -1, 1, 0);
-const R1: (u64, u32, u32) = (0b10 << u64::BITS -2, 2, 7);
-const R2: (u64, u32, u32) = (0b110 << u64::BITS -3, 3, 9);
-const R3: (u64, u32, u32) = (0b1110 << u64::BITS -MAX_BITS_USED, MAX_BITS_USED, 12);
-const R4: (u64, u32, u32) = (0b1111 << u64::BITS -MAX_BITS_USED, MAX_BITS_USED, 32);
+// // Range masks (4.1.1)
+// // (value, bits used)
+// const MAX_BITS_USED: u32 = 4;
+// const R0: (u64, u32, u32) = (0b0 << u64::BITS -1, 1, 0);
+// const R1: (u64, u32, u32) = (0b10 << u64::BITS -2, 2, 7);
+// const R2: (u64, u32, u32) = (0b110 << u64::BITS -3, 3, 9);
+// const R3: (u64, u32, u32) = (0b1110 << u64::BITS -MAX_BITS_USED, MAX_BITS_USED, 12);
+// const R4: (u64, u32, u32) = (0b1111 << u64::BITS -MAX_BITS_USED, MAX_BITS_USED, 32);
 
-const MASKS: [(u64, u32, u32); 5] = [R0, R1, R2, R3, R4];
+// const MASKS: [(u64, u32, u32); 5] = [R0, R1, R2, R3, R4];
 
-const U64_BITS: usize = 63 as usize;
+// const U64_BITS: usize = 63 as usize;
 
 #[derive(Default)]
 struct BitWriter {
@@ -35,47 +35,23 @@ impl BitWriter {
     }
 
     pub fn write(&mut self, mut to_write: u64, mut bits_to_write: usize) {
-       
+        assert!(bits_to_write < 64);
         // mask off to_write
         while bits_to_write > 0 {
             let mask = !(u64::MAX << bits_to_write);
-            println!("to_write1 {to_write:b}");
             to_write = mask & to_write;
             let remaining = 64 - self.offset;
-            println!("mask {mask:b} to_write: {to_write:b} rem: {}", remaining);
             if bits_to_write > remaining {
-                println!("Flush");
                 self.scratch |= to_write >> (bits_to_write - remaining);
                 bits_to_write -= remaining;
                 self.flush();
             } else {
                 self.scratch |= to_write << remaining - bits_to_write;
                 let s = self.scratch;
-                println!("scr1: {s:b}");
                 self.offset += bits_to_write;
                 bits_to_write -= bits_to_write;
             }
         }
-        // let s = self.scratch;
-        // println!("scr1: {s:b}");
-        // let mask = !(u64::MAX << bits_to_write);
-        // to_write = mask & to_write;
-        // if self.offset + bits_to_write > U64_BITS as _ {
-        //     let remaining = U64_BITS - self.offset; // 64 - 62 = 2
-        //     // write what we can into the scratch
-        //     let remaining_after_write = (bits_to_write - remaining) - 1; //7 - 2 = 5
-        //     let masked_current = to_write >> remaining;
-        //     self.scratch |= masked_current;
-        //     let s = self.scratch;
-        //     println!("scr2: {s:b}");
-        //     self.flush();
-
-        //     bits_to_write = remaining_after_write;
-        //     to_write = !(u64::MAX >> (U64_BITS - bits_to_write));
-            
-        // }
-        // self.scratch |= to_write << (U64_BITS - self.offset);
-        // self.offset += bits_to_write;
     }
 
     pub fn finish(mut self) -> BytesMut {
@@ -123,16 +99,18 @@ impl BitReader {
         while bits_to_read > 0 {
             let remaining = 64 - self.offset;
             let mask = self.scratch;
-            println!("1remain: {}\n1  mask: {mask:b}\n  acc:{acc:b}", remaining);
+            let scratch = self.scratch;
             if remaining >= bits_to_read {
                 acc <<= bits_to_read;
-                acc |= self.scratch >> U64_BITS - bits_to_read + 1;
+                acc |= self.scratch >> 64 - bits_to_read;
                 self.scratch <<= bits_to_read;
                 self.offset += bits_to_read;
                 bits_to_read -= bits_to_read
             } else {
-                acc |= self.scratch >> U64_BITS - remaining;
-                bits_to_read -= remaining;
+                if remaining > 0 {
+                    acc |= self.scratch >> 64 - remaining;
+                    bits_to_read -= remaining;
+                }
                 self.rotate_scratch();
             }
         }
@@ -189,7 +167,6 @@ mod test {
             }
         }
         let buf = writer.finish().freeze();
-        let mut cloned_buf = buf.clone();
         let mut reader = BitReader::from(buf);
         for i in 0..128 {
             let bit = reader.read_bit();
@@ -201,7 +178,6 @@ mod test {
         }
     }
     fn do_fixed_bit_test(bits_to_write: usize, expected: u64) {
-        println!("expected: {expected:b}");
         let mut writer = BitWriter::default();
         for i in 0..128 {
             if i % bits_to_write == 0 {
@@ -211,13 +187,9 @@ mod test {
             }
         }
         let buf = writer.finish().freeze();
-        let mut cloned_buf = buf.clone();
-        let v = cloned_buf.get_u64();
-        println!("v: {v:b}");
         let mut reader = BitReader::from(buf);
         for i in 0..128 {
             let bit = reader.read(bits_to_write);
-            println!("Bit {} at {}", bit, i);
             if i % bits_to_write == 0 {
                 assert!(bit == expected);
             } else {
@@ -248,9 +220,29 @@ mod test {
     }
 
     #[test]
+    fn writer_all_32bits() {
+        let bits_to_write = 32;
+        let expected = 0xFFFFFFFF;
+        do_fixed_bit_test(bits_to_write, expected);
+    }
+
+    #[test]
+    fn writer_all_63bits() {
+        let bits_to_write = 63;
+        let expected = 0x7FFFFFFFFFFFFFFF;
+        do_fixed_bit_test(bits_to_write, expected);
+    }
+
+    #[test]
     fn writer_all_3bits() {
         let bits_to_write = 3;
         let expected = 0x07;
+        do_fixed_bit_test(bits_to_write, expected);
+    }
+    #[test]
+    fn writer_all_7bits() {
+        let bits_to_write = 7;
+        let expected = 0x7F;
         do_fixed_bit_test(bits_to_write, expected);
     }
 }
