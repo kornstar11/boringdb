@@ -35,28 +35,47 @@ impl BitWriter {
     }
 
     pub fn write(&mut self, mut to_write: u64, mut bits_to_write: usize) {
+       
         // mask off to_write
-        //println!("to_write1 {to_write:b}");
-        let mask = !(u64::MAX << bits_to_write);
-        to_write = mask & to_write;
-        if self.offset + bits_to_write > U64_BITS as _ {
-            let remaining = U64_BITS - self.offset; // 64 - 62 = 2
-            let s = self.scratch;
-            println!("scr1: {s:b}");
-            // write what we can into the scratch
-            let remaining_after_write = (bits_to_write - remaining) - 1; //7 - 2 = 5
-            let masked_current = to_write >> remaining;
-            self.scratch |= masked_current;
-            let s = self.scratch;
-            println!("scr2: {s:b}");
-            self.flush();
-
-            bits_to_write = remaining_after_write;
-            to_write = !(u64::MAX >> (U64_BITS - bits_to_write));
-            
+        while bits_to_write > 0 {
+            let mask = !(u64::MAX << bits_to_write);
+            println!("to_write1 {to_write:b}");
+            to_write = mask & to_write;
+            let remaining = 64 - self.offset;
+            println!("mask {mask:b} to_write: {to_write:b} rem: {}", remaining);
+            if bits_to_write > remaining {
+                println!("Flush");
+                self.scratch |= to_write >> (bits_to_write - remaining);
+                bits_to_write -= remaining;
+                self.flush();
+            } else {
+                self.scratch |= to_write << remaining - bits_to_write;
+                let s = self.scratch;
+                println!("scr1: {s:b}");
+                self.offset += bits_to_write;
+                bits_to_write -= bits_to_write;
+            }
         }
-        self.scratch |= to_write << (U64_BITS - self.offset);
-        self.offset += bits_to_write;
+        // let s = self.scratch;
+        // println!("scr1: {s:b}");
+        // let mask = !(u64::MAX << bits_to_write);
+        // to_write = mask & to_write;
+        // if self.offset + bits_to_write > U64_BITS as _ {
+        //     let remaining = U64_BITS - self.offset; // 64 - 62 = 2
+        //     // write what we can into the scratch
+        //     let remaining_after_write = (bits_to_write - remaining) - 1; //7 - 2 = 5
+        //     let masked_current = to_write >> remaining;
+        //     self.scratch |= masked_current;
+        //     let s = self.scratch;
+        //     println!("scr2: {s:b}");
+        //     self.flush();
+
+        //     bits_to_write = remaining_after_write;
+        //     to_write = !(u64::MAX >> (U64_BITS - bits_to_write));
+            
+        // }
+        // self.scratch |= to_write << (U64_BITS - self.offset);
+        // self.offset += bits_to_write;
     }
 
     pub fn finish(mut self) -> BytesMut {
@@ -67,7 +86,6 @@ impl BitWriter {
     fn flush(&mut self) {
         self.offset = 0;
         let s = self.scratch;
-        println!("scr3: {s:b}");
         self.inner.put_u64(self.scratch);
         self.scratch = 0;
     }
@@ -117,45 +135,8 @@ impl BitReader {
                 bits_to_read -= remaining;
                 self.rotate_scratch();
             }
-
-
         }
         return acc;
-        // let mut acc_offset = 0;
-        // let remaining_in_scratch = U64_BITS - self.offset;
-        // let to_read_from_scratch = remaining_in_scratch.min(bits_to_read);
-        // let scratch_mask = !(u64::MAX >> to_read_from_scratch);
-        // println!("1toread: {}\n1  mask: {scratch_mask:b}", to_read_from_scratch);
-        // let masked = (self.scratch & scratch_mask);
-        // let to_add = (self.scratch & scratch_mask) >> (64 - to_read_from_scratch);
-        // println!("toread: {}\n  mask: {scratch_mask:b}\nmasked: {masked:b}\ntoadd:  {to_add:b}", to_read_from_scratch);
-        // acc |= to_add;
-        // self.scratch <<= to_read_from_scratch;
-        // self.offset += to_read_from_scratch;
-        // return acc;
-
-        
-
-        // let s = self.scratch;
-        // println!("1bits_to_read: {}\n1remaining: {}\n1offset: {}\nscr: {s:b}\n=======", bits_to_read, remaining, self.offset);
-        // if bits_to_read > remaining {
-        //     let s = self.scratch;
-        //     let mask = u64::MAX << self.offset;
-        //     acc |= self.scratch & mask;
-        //     println!("Flipping:\n scr: {s:b}\n acc: {acc:b}\n mask: {mask:b}");
-        //     acc <<= remaining; //bits_to_read - remaining;
-        //     self.rotate_scratch();
-        //     bits_to_read -= remaining;
-        // }
-        // let mask = !(u64::MAX >> bits_to_read);
-        // println!("mask: {mask:b}");
-        // acc |= (self.scratch & mask) >> U64_BITS - bits_to_read + 1;
-        // let xx = self.scratch;
-        // println!(" acc: {acc:b}\n scr: {xx:b}\n");
-        // println!("bits: {}", bits_to_read);
-        // self.scratch <<= bits_to_read;
-        // self.offset += bits_to_read;
-        // return acc;
     }
 
     fn rotate_scratch(&mut self) {
@@ -176,11 +157,7 @@ mod test {
         writer.on();
         writer.on();
 
-        let mut buf = writer.finish().freeze();
-        let v = buf.clone().get_u64();
-        println!("v: {v:b}");
-
-
+        let buf = writer.finish().freeze();
         let mut reader = BitReader::from(buf);
         assert_eq!(reader.read_bit(), true);
         assert_eq!(reader.read_bit(), false);
@@ -197,10 +174,10 @@ mod test {
         let mut cloned_buf = buf.clone();
         for i in 0..(256/64) {
             let v = cloned_buf.get_u64();
-            println!("v{}: {v:b}", i);
             assert_eq!(v, u64::MAX);
         }
     }
+
     #[test]
     fn writer_all_alternate() {
         let mut writer = BitWriter::default();
@@ -212,15 +189,68 @@ mod test {
             }
         }
         let buf = writer.finish().freeze();
+        let mut cloned_buf = buf.clone();
         let mut reader = BitReader::from(buf);
         for i in 0..128 {
             let bit = reader.read_bit();
-            println!("Bit {} at {}", bit, i);
             if i % 2 == 1 {
                 assert!(bit == true);
             } else {
                 assert!(bit == false);
             }
         }
+    }
+    fn do_fixed_bit_test(bits_to_write: usize, expected: u64) {
+        println!("expected: {expected:b}");
+        let mut writer = BitWriter::default();
+        for i in 0..128 {
+            if i % bits_to_write == 0 {
+                writer.write(expected, bits_to_write);
+            } else {
+                writer.write(0, bits_to_write);
+            }
+        }
+        let buf = writer.finish().freeze();
+        let mut cloned_buf = buf.clone();
+        let v = cloned_buf.get_u64();
+        println!("v: {v:b}");
+        let mut reader = BitReader::from(buf);
+        for i in 0..128 {
+            let bit = reader.read(bits_to_write);
+            println!("Bit {} at {}", bit, i);
+            if i % bits_to_write == 0 {
+                assert!(bit == expected);
+            } else {
+                assert!(bit == 0);
+            }
+        }
+
+    }
+    #[test]
+    fn writer_all_4bits() {
+        let bits_to_write = 4;
+        let expected = 0x0F;
+        do_fixed_bit_test(bits_to_write, expected);
+    }
+
+    #[test]
+    fn writer_all_8bits() {
+        let bits_to_write = 8;
+        let expected = 0xFF;
+        do_fixed_bit_test(bits_to_write, expected);
+    }
+
+    #[test]
+    fn writer_all_12bits() {
+        let bits_to_write = 12;
+        let expected = 0xFFF;
+        do_fixed_bit_test(bits_to_write, expected);
+    }
+
+    #[test]
+    fn writer_all_3bits() {
+        let bits_to_write = 3;
+        let expected = 0x07;
+        do_fixed_bit_test(bits_to_write, expected);
     }
 }
