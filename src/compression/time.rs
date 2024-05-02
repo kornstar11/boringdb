@@ -47,7 +47,6 @@ impl BitWriter {
                 self.flush();
             } else {
                 self.scratch |= to_write << remaining - bits_to_write;
-                let s = self.scratch;
                 self.offset += bits_to_write;
                 bits_to_write -= bits_to_write;
             }
@@ -98,8 +97,6 @@ impl BitReader {
         let mut acc = 0;
         while bits_to_read > 0 {
             let remaining = 64 - self.offset;
-            let mask = self.scratch;
-            let scratch = self.scratch;
             if remaining >= bits_to_read {
                 acc <<= bits_to_read;
                 acc |= self.scratch >> 64 - bits_to_read;
@@ -150,7 +147,7 @@ mod test {
         }
         let buf = writer.finish().freeze();
         let mut cloned_buf = buf.clone();
-        for i in 0..(256/64) {
+        for _ in 0..(256/64) {
             let v = cloned_buf.get_u64();
             assert_eq!(v, u64::MAX);
         }
@@ -225,6 +222,13 @@ mod test {
         let expected = 0xFFFFFFFF;
         do_fixed_bit_test(bits_to_write, expected);
     }
+
+    // #[test]
+    // fn writer_all_64bits() {
+    //     let bits_to_write = 64;
+    //     let expected = 0xFFFFFFFFFFFFFFFF;
+    //     do_fixed_bit_test(bits_to_write, expected);
+    // }
 
     #[test]
     fn writer_all_63bits() {
