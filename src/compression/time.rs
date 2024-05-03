@@ -35,6 +35,7 @@ impl BitWriter {
     }
 
     pub fn write(&mut self, mut to_write: u64, mut bits_to_write: usize) {
+        assert!(bits_to_write <= 64);
         if bits_to_write >= 64 {
             //divide the bits up in 32 bits
             let half = bits_to_write / 2;
@@ -110,8 +111,8 @@ impl BitReader {
     }
 
     fn read(&mut self, mut bits_to_read: usize) -> u64 {
-
-        if bits_to_read >= 64 {
+        assert!(bits_to_read <= 64);
+        if bits_to_read == 64 {
             let mut acc = 0;
             let half = bits_to_read / 2;
             while bits_to_read > 0 {
