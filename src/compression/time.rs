@@ -35,8 +35,23 @@ impl BitWriter {
     }
 
     pub fn write(&mut self, mut to_write: u64, mut bits_to_write: usize) {
-        assert!(bits_to_write < 64);
+        if bits_to_write >= 64 {
+            //divide the bits up in 32 bits
+            let half = bits_to_write / 2;
+            while bits_to_write > 0 {
+                self.inner_write(to_write, half);
+                to_write >>= half;
+                bits_to_write -= half;
+            }
+        } else {
+            self.inner_write(to_write, bits_to_write);
+        }
+    }
+
+    fn inner_write(&mut self, mut to_write: u64, mut bits_to_write: usize) {
+        //assert!(bits_to_write < 64);
         // mask off to_write
+   
         while bits_to_write > 0 {
             let mask = !(u64::MAX << bits_to_write);
             to_write = mask & to_write;
@@ -93,7 +108,25 @@ impl BitReader {
             false
         }
     }
-    pub fn read(&mut self, mut bits_to_read: usize) -> u64 {
+
+    fn read(&mut self, mut bits_to_read: usize) -> u64 {
+
+        if bits_to_read >= 64 {
+            let mut acc = 0;
+            let half = bits_to_read / 2;
+            while bits_to_read > 0 {
+                acc <<= half;
+                let read = self.inner_read(half);
+                acc |= read;
+                bits_to_read -= half;
+            }
+            return acc;
+        } else {
+            return self.inner_read(bits_to_read);
+        }
+    }
+
+    fn inner_read(&mut self, mut bits_to_read: usize) -> u64 {
         let mut acc = 0;
         while bits_to_read > 0 {
             let remaining = 64 - self.offset;
@@ -223,12 +256,12 @@ mod test {
         do_fixed_bit_test(bits_to_write, expected);
     }
 
-    // #[test]
-    // fn writer_all_64bits() {
-    //     let bits_to_write = 64;
-    //     let expected = 0xFFFFFFFFFFFFFFFF;
-    //     do_fixed_bit_test(bits_to_write, expected);
-    // }
+    #[test]
+    fn writer_all_64bits() {
+        let bits_to_write = 64;
+        let expected = 0xFFFFFFFFFFFFFFFF;
+        do_fixed_bit_test(bits_to_write, expected);
+    }
 
     #[test]
     fn writer_all_63bits() {
