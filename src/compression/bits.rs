@@ -36,36 +36,19 @@ impl BitWriter {
         self.write(0, 1)
     }
 
-    pub fn write(&mut self, mut to_write: u64, mut bits_to_write: usize) {
-        assert!(bits_to_write <= 64);
-        if bits_to_write == 64 {
-            //divide the bits up in 32 bits
-            let half = 32;
-            while bits_to_write > 0 {
-                self.inner_write(to_write, bits_to_write);
-                to_write >>= half;
-                bits_to_write -= half;
-            }
-        } else {
-            self.inner_write(to_write, bits_to_write);
-        }
-    }
-
-    fn inner_write(&mut self, mut to_write: u64, mut bits_to_write: usize) {
+    fn write(&mut self, mut to_write: u64, mut bits_to_write: usize) {
         //assert!(bits_to_write < 64);
-        // mask off to_write
-        to_write.checked_shl(rhs)
 
         while bits_to_write > 0 {
-            let mask = !(u64::MAX << bits_to_write);
+            let mask = !(u64::MAX.checked_shl(bits_to_write as _).unwrap_or(0));
             to_write = mask & to_write;
             let remaining = 64 - self.offset;
             if bits_to_write > remaining {
-                self.scratch |= to_write >> (bits_to_write - remaining);
+                self.scratch |= to_write.checked_shr((bits_to_write - remaining) as _).unwrap_or(0);
                 bits_to_write -= remaining;
                 self.flush();
             } else {
-                self.scratch |= to_write << remaining - bits_to_write;
+                self.scratch |= to_write.checked_shl((remaining - bits_to_write) as _).unwrap_or(0);
                 self.offset += bits_to_write;
                 bits_to_write -= bits_to_write;
             }
@@ -112,35 +95,18 @@ impl BitReader {
     }
 
     fn read(&mut self, mut bits_to_read: usize) -> u64 {
-        assert!(bits_to_read <= 64);
-        if bits_to_read == 64 {
-            let mut acc = 0;
-            let half = 32;
-            while bits_to_read > 0 {
-                acc <<= half;
-                let read = self.inner_read(half);
-                acc |= read;
-                bits_to_read -= half;
-            }
-            return acc;
-        } else {
-            return self.inner_read(bits_to_read);
-        }
-    }
-
-    fn inner_read(&mut self, mut bits_to_read: usize) -> u64 {
-        let mut acc = 0;
+        let mut acc: u64 = 0;
         while bits_to_read > 0 {
             let remaining = 64 - self.offset;
             if remaining >= bits_to_read {
-                acc <<= bits_to_read;
-                acc |= self.scratch >> 64 - bits_to_read;
-                self.scratch <<= bits_to_read;
+                acc = acc.checked_shl(bits_to_read as _).unwrap_or(0);
+                acc |= self.scratch.checked_shr(64 - bits_to_read as u32).unwrap_or(0);
+                self.scratch = self.scratch.checked_shl(bits_to_read as _).unwrap_or(0);
                 self.offset += bits_to_read;
                 bits_to_read -= bits_to_read
             } else {
                 if remaining > 0 {
-                    acc |= self.scratch >> 64 - remaining;
+                    acc |= self.scratch.checked_shr(64 - remaining as u32).unwrap_or(0);
                     bits_to_read -= remaining;
                 }
                 self.rotate_scratch();
