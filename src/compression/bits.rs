@@ -1,3 +1,5 @@
+use std::ops::Shl;
+
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 // Time compressor uses the "delta of delta" ideas from Facebooks Gorrila paper
@@ -36,11 +38,11 @@ impl BitWriter {
 
     pub fn write(&mut self, mut to_write: u64, mut bits_to_write: usize) {
         assert!(bits_to_write <= 64);
-        if bits_to_write >= 64 {
+        if bits_to_write == 64 {
             //divide the bits up in 32 bits
-            let half = bits_to_write / 2;
+            let half = 32;
             while bits_to_write > 0 {
-                self.inner_write(to_write, half);
+                self.inner_write(to_write, bits_to_write);
                 to_write >>= half;
                 bits_to_write -= half;
             }
@@ -52,6 +54,7 @@ impl BitWriter {
     fn inner_write(&mut self, mut to_write: u64, mut bits_to_write: usize) {
         //assert!(bits_to_write < 64);
         // mask off to_write
+        to_write.checked_shl(rhs)
 
         while bits_to_write > 0 {
             let mask = !(u64::MAX << bits_to_write);
@@ -112,7 +115,7 @@ impl BitReader {
         assert!(bits_to_read <= 64);
         if bits_to_read == 64 {
             let mut acc = 0;
-            let half = bits_to_read / 2;
+            let half = 32;
             while bits_to_read > 0 {
                 acc <<= half;
                 let read = self.inner_read(half);
