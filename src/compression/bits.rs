@@ -25,6 +25,7 @@ pub struct BitWriter {
     inner: BytesMut,
     scratch: u64,
     offset: usize,
+    bits_written: usize,
 }
 
 impl BitWriter {
@@ -36,8 +37,13 @@ impl BitWriter {
         self.write(0, 1)
     }
 
+    pub fn bits_written(&self) -> usize {
+        self.bits_written
+    }
+
     pub fn write(&mut self, mut to_write: u64, mut bits_to_write: usize) {
         //assert!(bits_to_write < 64);
+        self.bits_written += bits_to_write;
 
         while bits_to_write > 0 {
             let mask = !(u64::MAX.checked_shl(bits_to_write as _).unwrap_or(0));

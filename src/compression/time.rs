@@ -65,13 +65,14 @@ impl BitId {
             return Ok(());
         }
         let abs: u64 = value.abs() as _;
-        let leading = abs.leading_zeros() + 1; // add 1 for the sign bit
+        let leading = abs.leading_zeros(); 
+        let pos_of_one = u64::BITS - leading + 1; // add one for leading
         let bit_ids: &Vec<BitId> = BITS_ORDER.as_ref();
         let mut selected_bit_id = Self::Bits64;
 
         for bit_id in bit_ids {
             let size = bit_id.supported_size();
-            if leading < size as _ {
+            if pos_of_one <= size as _ {
                 selected_bit_id = bit_id.clone();
                 break;
             }
@@ -80,9 +81,10 @@ impl BitId {
         let (id_size, id) = selected_bit_id.into_size_and_bit();
         writer.write(id as u64, id_size as _);
         // write signed value
+
         let size = selected_bit_id.supported_size();
         let sign: u64 = if value < 0 {1} else {0};
-        let mask: u64 = sign << size;
+        let mask: u64 = sign << (size - 1);
         let value = abs | mask;
         writer.write(value, size);
 
@@ -105,11 +107,12 @@ impl BitId {
         let size = selected_bit_id.supported_size();
         let value = reader.read(size);
         let mask: u64 = 1 << size - 1;
-        let sign = (value & mask) << 63;
+        let sign = (value & mask);
         let unsigned_value = value & !mask;
-        unsafe {
-            return Ok(transmute(unsigned_value | sign));
+        if sign != 0 {
+            return Ok(unsigned_value as i64 * -1);
         }
+        return Ok(unsigned_value as _);
     }
 }
 
@@ -159,5 +162,60 @@ impl Decompressor<i64> for TimeDecompressor {
         self.last_value = value;
         return Ok(value);
     }
-    
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    fn bit_id_test(to_write: i64, expected_bits_written: usize) {
+        let mut writer = BitWriter::default();
+        BitId::write_value(to_write, &mut writer).unwrap();
+        let bits_written = writer.bits_written();
+        println!("Bits written: {}", bits_written);
+
+        let bytes = writer.finish().freeze();
+        let mut reader = BitReader::from(bytes);
+        let value = BitId::read_value(&mut reader).unwrap();
+        assert_eq!(to_write, value);
+        assert_eq!(expected_bits_written, bits_written);
+    }
+
+    #[test]
+    fn bit_id_zero() {
+        bit_id_test(0, 1);
+    }
+
+    #[test]
+    fn bit_id_1() {
+        bit_id_test(1, 7 + 2);
+    }
+
+    #[test]
+    fn bit_id_63() {
+        bit_id_test(63, 7 + 2);
+    }
+
+    #[test]
+    fn bit_id_255() {
+        bit_id_test(255, 9 + 3);
+    }
+
+    #[test]
+    fn bit_id_neg_255() {
+        bit_id_test(-255, 9 + 3);
+    }
+
+    #[test]
+    fn bit_id_32() {
+        bit_id_test((i32::MIN + 1) as _, 37);
+    }
+    #[test]
+    fn bit_id_64() {
+        bit_id_test(i64::MAX as _, 70);
+    }
+    #[test]
+    fn bit_id_neg_64() {
+        bit_id_test(i64::MIN as _, 70);
+    }
 }
