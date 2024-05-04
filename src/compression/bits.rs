@@ -154,6 +154,8 @@ impl BitReader {
 
 #[cfg(test)]
 mod test {
+    use rand::random;
+
     use super::*;
 
     #[test]
@@ -279,5 +281,62 @@ mod test {
         let bits_to_write = 7;
         let expected = 0x7F;
         do_fixed_bit_test(bits_to_write, expected);
+    }
+
+    fn random_read_write(bits_to_write: usize) {
+        let mut writer = BitWriter::default();
+        let mut expected = vec![];
+        for _ in 0..128 {
+            let rand: u64 = random();
+            let mask = if bits_to_write == 64 {
+                u64::MAX
+            }
+            else {
+                !(u64::MAX << bits_to_write)
+            };
+            let masked = rand & mask;
+            writer.write(masked, bits_to_write);
+            expected.push(masked);
+        }
+        let buf = writer.finish().freeze();
+        let mut reader = BitReader::from(buf);
+        expected.reverse();
+        println!("Expectations: {:?}", expected);
+        for i in 0..128 {
+            let bit = reader.read(bits_to_write);
+            let expected = expected.pop().unwrap();
+            println!("Iteration: {}", i);
+            assert_eq!(expected, bit);
+        }
+    }
+
+    #[test]
+    fn writer_random_3() {
+        let bits_to_write = 3;
+        random_read_write(bits_to_write);
+    }
+
+    #[test]
+    fn writer_random_8() {
+        let bits_to_write = 8;
+        random_read_write(bits_to_write);
+    }
+
+    #[test]
+    fn writer_random_16() {
+        let bits_to_write = 16;
+        random_read_write(bits_to_write);
+    }
+
+    #[test]
+    fn writer_random_18() {
+        let bits_to_write = 18;
+        random_read_write(bits_to_write);
+    }
+
+    #[test]
+    fn writer_random_64() {
+        let bits_to_write = 64;
+        random_read_write(bits_to_write);
     }
 }
