@@ -44,11 +44,15 @@ impl BitWriter {
             to_write = mask & to_write;
             let remaining = 64 - self.offset;
             if bits_to_write > remaining {
-                self.scratch |= to_write.checked_shr((bits_to_write - remaining) as _).unwrap_or(0);
+                self.scratch |= to_write
+                    .checked_shr((bits_to_write - remaining) as _)
+                    .unwrap_or(0);
                 bits_to_write -= remaining;
                 self.flush();
             } else {
-                self.scratch |= to_write.checked_shl((remaining - bits_to_write) as _).unwrap_or(0);
+                self.scratch |= to_write
+                    .checked_shl((remaining - bits_to_write) as _)
+                    .unwrap_or(0);
                 self.offset += bits_to_write;
                 bits_to_write -= bits_to_write;
             }
@@ -100,7 +104,10 @@ impl BitReader {
             let remaining = 64 - self.offset;
             if remaining >= bits_to_read {
                 acc = acc.checked_shl(bits_to_read as _).unwrap_or(0);
-                acc |= self.scratch.checked_shr(64 - bits_to_read as u32).unwrap_or(0);
+                acc |= self
+                    .scratch
+                    .checked_shr(64 - bits_to_read as u32)
+                    .unwrap_or(0);
                 self.scratch = self.scratch.checked_shl(bits_to_read as _).unwrap_or(0);
                 self.offset += bits_to_read;
                 bits_to_read -= bits_to_read
@@ -259,8 +266,7 @@ mod test {
             let rand: u64 = random();
             let mask = if bits_to_write == 64 {
                 u64::MAX
-            }
-            else {
+            } else {
                 !(u64::MAX << bits_to_write)
             };
             let masked = rand & mask;
@@ -319,8 +325,7 @@ mod test {
             let rand: u64 = random();
             let mask = if bits_to_write == 64 {
                 u64::MAX
-            }
-            else {
+            } else {
                 !(u64::MAX << bits_to_write)
             };
             let masked = rand & mask;

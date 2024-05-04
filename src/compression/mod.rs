@@ -10,6 +10,6 @@ trait Compressor<I: Sized, O> {
     fn finish(self) -> Result<O>;
 }
 
-//trait Decompressor<O> {
-//    fn decompress(&mut self) -> Option<O>;
-//}
+trait Decompressor<O> {
+   fn decompress(&mut self) -> Result<O>;
+}
