@@ -36,7 +36,7 @@ impl BitWriter {
         self.write(0, 1)
     }
 
-    fn write(&mut self, mut to_write: u64, mut bits_to_write: usize) {
+    pub fn write(&mut self, mut to_write: u64, mut bits_to_write: usize) {
         //assert!(bits_to_write < 64);
 
         while bits_to_write > 0 {
@@ -94,7 +94,7 @@ impl BitReader {
         }
     }
 
-    fn read(&mut self, mut bits_to_read: usize) -> u64 {
+    pub fn read(&mut self, mut bits_to_read: usize) -> u64 {
         let mut acc: u64 = 0;
         while bits_to_read > 0 {
             let remaining = 64 - self.offset;
