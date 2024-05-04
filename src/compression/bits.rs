@@ -308,4 +308,34 @@ mod test {
         let bits_to_write = 64;
         random_read_write(bits_to_write);
     }
+    #[test]
+    fn random_value_size() {
+        let mut writer = BitWriter::default();
+        let mut expected = vec![];
+        for _ in 0..128 {
+            let mut bits_to_write: usize = random();
+            bits_to_write %= 64;
+
+            let rand: u64 = random();
+            let mask = if bits_to_write == 64 {
+                u64::MAX
+            }
+            else {
+                !(u64::MAX << bits_to_write)
+            };
+            let masked = rand & mask;
+            writer.write(masked, bits_to_write);
+            expected.push((bits_to_write, masked));
+        }
+        let buf = writer.finish().freeze();
+        let mut reader = BitReader::from(buf);
+        expected.reverse();
+        println!("Expectations: {:?}", expected);
+        for i in 0..128 {
+            let (bits_to_read, expected) = expected.pop().unwrap();
+            let bit = reader.read(bits_to_read);
+            println!("Iteration: {}", i);
+            assert_eq!(expected, bit);
+        }
+    }
 }
