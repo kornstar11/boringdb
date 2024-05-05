@@ -73,7 +73,7 @@ impl BitId {
 
         for bit_id in bit_ids {
             let size = bit_id.supported_size();
-            if pos_of_one <= size as _ {
+            if pos_of_one < size as _ {
                 selected_bit_id = bit_id.clone();
                 break;
             }
@@ -82,7 +82,9 @@ impl BitId {
         let (id_size, id) = selected_bit_id.into_size_and_bit();
         writer.write(id as u64, id_size as _);
         // write signed value
-
+        if let Self::NoChange = selected_bit_id{
+            return Ok(());
+        }
         let size = selected_bit_id.supported_size();
         let mask: u64 = sign << (size - 1);
         let value = abs | mask;
@@ -107,7 +109,7 @@ impl BitId {
         let size = selected_bit_id.supported_size();
         let value = reader.read(size);
         let mask: u64 = 1 << size - 1;
-        let sign = (value & mask);
+        let sign = value & mask;
         let unsigned_value = value & !mask;
         if sign != 0 {
             return Ok(unsigned_value as i64 * -1);
@@ -116,16 +118,17 @@ impl BitId {
     }
 }
 
+#[derive(Default)]
 pub struct TimeCompressor {
     last_value: i64,
     last_delta: i64,
     bits_writer: BitWriter,
 }
 
-impl Compressor<u64, Bytes> for TimeCompressor {
-    fn compress(&mut self, i: u64) -> Result<()> {
-        let delta = (i as i64) - self.last_value;
-        self.last_value = i as i64;
+impl Compressor<i64, Bytes> for TimeCompressor {
+    fn compress(&mut self, i: i64) -> Result<()> {
+        let delta = i - self.last_value;
+        self.last_value = i;
         let d_of_d = delta - self.last_delta;
         self.last_delta = delta;
         BitId::write_value(d_of_d, &mut self.bits_writer)?;
@@ -166,13 +169,59 @@ impl Decompressor<i64> for TimeDecompressor {
 
 #[cfg(test)]
 mod test {
+    use std::{alloc::System, time::SystemTime};
+
     use super::*;
+
+    fn round_trip_test(inputs: Vec<i64>) {
+        let mut compressor = TimeCompressor::default();
+        for input in inputs.iter() {
+            compressor.compress(*input).unwrap();
+        }
+
+        let bites_written = compressor.bits_writer.bits_written();
+        println!("bits_written: {}", bites_written);
+        let bytes = compressor.finish().unwrap();
+        let mut decompressor = TimeDecompressor::from(bytes);
+
+        for i in inputs.iter() {
+            let decompressed = decompressor.decompress().unwrap();
+            assert_eq!(*i, decompressed);
+        }
+    }
+    #[test]
+    fn times_round_trip_test_multi() {
+        let ts = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let mut inputs = vec![];
+        for i in 1..10 {
+            inputs.push(i * ts);
+        }
+
+        round_trip_test(inputs);
+    }
+
+    #[test]
+    fn times_round_trip_test_1000() {
+        let ts = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let mut inputs = vec![];
+        for i in 0..10 {
+            inputs.push((i * 1000) + ts);
+        }
+
+        round_trip_test(inputs);
+    }
 
     fn bit_id_test(to_write: i64, expected_bits_written: usize) {
         let mut writer = BitWriter::default();
         BitId::write_value(to_write, &mut writer).unwrap();
         let bits_written = writer.bits_written();
-        println!("Bits written: {}", bits_written);
+        println!("bits_written: {}", bits_written);
 
         let bytes = writer.finish().freeze();
         let mut reader = BitReader::from(bytes);
@@ -203,12 +252,12 @@ mod test {
 
     #[test]
     fn bit_id_neg_255() {
-        bit_id_test(-255, 9 + 3);
+        bit_id_test(-255, 20);
     }
 
     #[test]
     fn bit_id_32() {
-        bit_id_test((i32::MIN + 1) as _, 37);
+        bit_id_test((i32::MIN + 1) as _, 70);
     }
     #[test]
     fn bit_id_64() {
