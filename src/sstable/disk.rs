@@ -89,34 +89,38 @@ impl Value {
 }
 
 pub struct InternalDiskSSTableBuilder {
-    file: File
+    file: File,
 }
 
 impl InternalDiskSSTableBuilder {
-    pub fn new(file: File) -> Self{
-        Self {file}
+    pub fn new(file: File) -> Self {
+        Self { file }
     }
-    pub fn set_values_it(mut self, values: impl Iterator<Item = Result<ValueRef>>) -> Result<InternalDiskSSTableBuilderHasValues> {
+    pub fn set_values_it(
+        mut self,
+        values: impl Iterator<Item = Result<ValueRef>>,
+    ) -> Result<InternalDiskSSTableBuilderHasValues> {
         let mut values_to_position = ValuesToPositions::default();
         InternalDiskSSTable::encode_values(values, &mut self.file, &mut values_to_position)?;
-        Ok(InternalDiskSSTableBuilderHasValues{file: self.file, values_to_position})
+        Ok(InternalDiskSSTableBuilderHasValues {
+            file: self.file,
+            values_to_position,
+        })
     }
 }
 
-pub struct InternalDiskSSTableBuilderHasValues{
+pub struct InternalDiskSSTableBuilderHasValues {
     file: File,
     values_to_position: ValuesToPositions,
 }
 
 impl InternalDiskSSTableBuilderHasValues {
-    pub fn finish(mut self, keys: impl Iterator<Item = Vec<u8>>,) -> Result<File> {
+    pub fn finish(mut self, keys: impl Iterator<Item = Vec<u8>>) -> Result<File> {
         InternalDiskSSTable::encode_keys(keys, &mut self.file, self.values_to_position)?;
         self.file.sync_all()?;
         Ok(self.file)
     }
-    
 }
-
 
 type KeyValueIdxPair = (Vec<ValueIndex>, Vec<ValueIndex>);
 ///
@@ -145,10 +149,7 @@ impl InternalDiskSSTable {
         file: File,
     ) -> Result<InternalDiskSSTable> {
         let bldr = InternalDiskSSTableBuilder::new(file);
-        let file = bldr
-            .set_values_it(values)?
-            .finish(keys)?;
-
+        let file = bldr.set_values_it(values)?.finish(keys)?;
 
         Ok(InternalDiskSSTable {
             file,
@@ -419,8 +420,6 @@ impl SSTable<Vec<u8>> for DiskSSTable {
         self.inner.lock().read_number_of_keys()
     }
 }
-
-
 
 #[cfg(test)]
 mod test {

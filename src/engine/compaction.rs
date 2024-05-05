@@ -6,8 +6,9 @@ use crate::{
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     path::PathBuf,
+    rc::Rc,
     sync::mpsc::{sync_channel, Receiver},
-    thread::{spawn, JoinHandle}, rc::Rc,
+    thread::{spawn, JoinHandle},
 };
 
 pub trait CompactorFactory: Send {
@@ -40,29 +41,22 @@ impl SimpleCompactorState {
             .iter()
             .map(|table| table.iter_key_idxs())
             .collect::<Vec<_>>();
-        let sorted_iter =
-            SortedDiskSSTableKeyValueIterator::new(iters).filter_map(|res| {
-                match res {
-                    Ok((k, k_idx, v, v_idx)) => {
-                        if seen.contains(&k) {
-                            None
-                        } else {
-                            seen.insert(k.to_vec());
-                            Some(Ok((k, k_idx, v, v_idx)))
-                        }
-                    },
-                    Err(e) => Some(Err(e))
+        let sorted_iter = SortedDiskSSTableKeyValueIterator::new(iters)
+            .filter_map(|res| match res {
+                Ok((k, k_idx, v, v_idx)) => {
+                    if seen.contains(&k) {
+                        None
+                    } else {
+                        seen.insert(k.to_vec());
+                        Some(Ok((k, k_idx, v, v_idx)))
+                    }
                 }
-            }).collect::<Result<Vec<_>>>()?;
+                Err(e) => Some(Err(e)),
+            })
+            .collect::<Result<Vec<_>>>()?;
         //let mut enumeration_idx_inner = Rc::clone(&enumeration_idx);
-        let key_it = sorted_iter
-            .iter()
-            .map(|(k, _, _, _)| {
-                k.to_vec()
-            });
-        let value_it = sorted_iter
-            .iter()
-            .map(|(_, idx, _, vidx)| {
+        let key_it = sorted_iter.iter().map(|(k, _, _, _)| k.to_vec());
+        let value_it = sorted_iter.iter().map(|(_, idx, _, vidx)| {
             if let Some(table) = to_merge.get_mut(*idx) {
                 table.read_value_by_value_idx(&vidx).map(|v| v.value_ref)
             } else {
@@ -218,8 +212,9 @@ mod test {
         let evens1 =
             DiskSSTable::convert_mem(evens1_path.clone(), generate_memory(generate_even_kvs()))
                 .unwrap();
-        let evens2 = DiskSSTable::convert_mem(evens2_path.clone(), generate_memory(generate_even_kvs()))
-            .unwrap();
+        let evens2 =
+            DiskSSTable::convert_mem(evens2_path.clone(), generate_memory(generate_even_kvs()))
+                .unwrap();
         let tracked_sstables = vec![(evens1.path(), evens1), (evens2.path(), evens2)]
             .into_iter()
             .collect();
