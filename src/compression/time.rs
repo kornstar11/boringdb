@@ -64,9 +64,10 @@ impl BitId {
             writer.write(id as u64, id_size as _);
             return Ok(());
         }
+        let sign: u64 = if value < 0 {1} else {0};
         let abs: u64 = value.abs() as _;
         let leading = abs.leading_zeros(); 
-        let pos_of_one = u64::BITS - leading + 1; // add one for leading
+        let pos_of_one = u64::BITS - leading + sign as u32; // add one for leading
         let bit_ids: &Vec<BitId> = BITS_ORDER.as_ref();
         let mut selected_bit_id = Self::Bits64;
 
@@ -83,7 +84,6 @@ impl BitId {
         // write signed value
 
         let size = selected_bit_id.supported_size();
-        let sign: u64 = if value < 0 {1} else {0};
         let mask: u64 = sign << (size - 1);
         let value = abs | mask;
         writer.write(value, size);
@@ -216,6 +216,6 @@ mod test {
     }
     #[test]
     fn bit_id_neg_64() {
-        bit_id_test(i64::MIN as _, 70);
+        bit_id_test((1 + i64::MIN) as _, 70);
     }
 }
