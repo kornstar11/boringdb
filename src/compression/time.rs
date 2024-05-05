@@ -1,5 +1,3 @@
-use std::{fmt::DebugList, mem::transmute};
-
 use bytes::Bytes;
 use once_cell::sync::Lazy;
 
@@ -27,17 +25,8 @@ enum BitId {
     Bits64,
 }
 impl BitId {
-    pub fn from_leading(leading: usize) -> Self {
-        match leading {
-            n if n == 1 => Self::NoChange,
-            n if n <= 7 => Self::Bits7,
-            n if n <= 9 => Self::Bits9,
-            n if n <= 16 => Self::Bits16,
-            n if n <= 32 => Self::Bits32,
-            _ => Self::Bits64,
-        }
-    }
-    pub fn supported_size(&self) -> usize { //macro
+    pub fn supported_size(&self) -> usize {
+        //macro
         return match self {
             Self::NoChange => 1,
             Self::Bits7 => 7,
@@ -45,7 +34,7 @@ impl BitId {
             Self::Bits16 => 16,
             Self::Bits32 => 32,
             Self::Bits64 => 64,
-        }
+        };
     }
     pub fn into_size_and_bit(&self) -> (u8, u8) {
         return match self {
@@ -59,14 +48,15 @@ impl BitId {
     }
 
     pub fn write_value(value: i64, writer: &mut BitWriter) -> Result<()> {
-        if value == 0 { // special case
+        if value == 0 {
+            // special case
             let (id_size, id) = Self::NoChange.into_size_and_bit();
             writer.write(id as u64, id_size as _);
             return Ok(());
         }
-        let sign: u64 = if value < 0 {1} else {0};
+        let sign: u64 = if value < 0 { 1 } else { 0 };
         let abs: u64 = value.abs() as _;
-        let leading = abs.leading_zeros(); 
+        let leading = abs.leading_zeros();
         let pos_of_one = u64::BITS - leading + sign as u32; // add one for leading
         let bit_ids: &Vec<BitId> = BITS_ORDER.as_ref();
         let mut selected_bit_id = Self::Bits64;
@@ -82,7 +72,7 @@ impl BitId {
         let (id_size, id) = selected_bit_id.into_size_and_bit();
         writer.write(id as u64, id_size as _);
         // write signed value
-        if let Self::NoChange = selected_bit_id{
+        if let Self::NoChange = selected_bit_id {
             return Ok(());
         }
         let size = selected_bit_id.supported_size();

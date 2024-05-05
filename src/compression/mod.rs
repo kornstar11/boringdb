@@ -11,5 +11,5 @@ trait Compressor<I: Sized, O> {
 }
 
 trait Decompressor<O> {
-   fn decompress(&mut self) -> Result<O>;
+    fn decompress(&mut self) -> Result<O>;
 }
